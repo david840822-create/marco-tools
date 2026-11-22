@@ -7,7 +7,7 @@
 
 ## 絕對規則
 1. **接單不能取消、不能退回。** 不得在真實訂單上按「接單」或「確定接單」，除非使用者在對話中明確同意「那一筆」。後台詳情頁「接單」旁邊是「取消訂單」，任何時候都不要點。
-2. **上傳到 GitHub = 三台電腦立刻生效。** 一定先在後台實測通過才上傳；上傳後打開 GitHub Pages 網址確認內容是新的，再用書籤方式實測一次。
+2. **`main` 分支 = 三台電腦正在用的正式版。** 協作者不能直接改 `main`：一律在新分支提交、開 Pull Request，寫清楚改了什麼與怎麼測過，由專案擁有者 Merge 才上線。不要嘗試繞過分支保護。測試一律用「在後台頁面注入本機檔案」的方式，不需要上傳。
 3. 「產生出貨單」會真的分配車次（只動未分配的訂單）。測試要用使用者指定的測試批次。
 4. 只透過後台自己的頁面（隱藏 iframe、讀 DOM、按按鈕）操作。**不要**拿 localStorage 裡的 token 直接呼叫 api.super-marco.com（使用者端曾拒絕這種做法）。
 5. 這個 repo 是公開的：不要寫入密碼、token、個人信箱、客戶資料。
@@ -17,7 +17,7 @@
 - 修改後先在後台頁面注入測試：可用 Claude in Chrome，在頁面建一個 `<input type=file>`，用 file_upload 上傳本機檔案，再 `(0,eval)(await file.text())` 執行。讀取類功能可以在真實資料上「只看不按」測試。
 - `javascript_tool` 的輸出若含網址查詢字串或疑似 token 會被遮蔽，回傳時只回數量／結構。
 - 隱藏 iframe 讀頁面時一律「等數字穩定」：連續幾次讀到一樣的結果才算載入完成（後台很多數字會先顯示 0 或舊資料）。
-- 上傳 GitHub：用 Chrome 開 `https://github.com/david840822-create/marco-tools/upload/main`（子資料夾用 `/upload/main/資料夾名`），file_upload 檔案後 Commit。
+- 上傳 GitHub：用 Chrome 開 `https://github.com/david840822-create/marco-tools/upload/main`（子資料夾用 `/upload/main/資料夾名`），file_upload 檔案後選「Create a new branch … and start a pull request」→ Propose changes。只有擁有者本人可以 Merge。
 - Markdown 檔裡不要出現 Liquid 語法（兩個左大括號、或左大括號加百分號），GitHub Pages 的 Jekyll 會建置失敗，連帶 JS 也不會更新。
 - 改了 `installer/` 才需要 `node installer/build-bat.js` 重做安裝檔並重新發給各台電腦；只改 `mk.js`／`accept.js`／`print.js` 不用重裝。
 
@@ -25,6 +25,7 @@
 - 原始碼備份在 `apps-script/ok-list.gs`；實際執行的在試算表的 Apps Script 專案。
 - 介面：`GET ?action=list` → `{ok, list:[{status,customer,product,note,scope}]}`（只回「核准」「待審核」）；`GET ?action=submit&customer=&product=&note=&scope=此客戶|所有客戶&who=` → `{ok}` 或 `{ok, dup:true, status}`。
 - 更新程式要「管理部署作業 → 編輯 → 新版本」，**不要新增部署**（網址會變，`accept.js` 的 `OK_API` 要跟著改）。
+- 協作者不要直接重新部署正式的 Apps Script；修改先寫進 `apps-script/ok-list.gs` 開 Pull Request，由擁有者部署。
 
 ## 業務規則（使用者定的）
 - 檢查待接單的日期：早上 6 點以後 → 明天；0～6 點 → 今天。

@@ -47,14 +47,23 @@ accept.js ⇄ Google Apps Script 網路程式 ⇄ Google 試算表「馬可小�
 
 ---
 
-## 三、怎麼修改程式（標準流程）
+## 三、怎麼修改程式（標準流程：協作者提案 → 擁有者核准才上線）
 
-1. **先在後台測試，再上傳。** 一上傳三台電腦就生效。測試方法：
-   - 打開後台頁面 → F12 開發人員工具 → Console，把修改後的整個檔案內容貼上執行，看效果。
+**現場三台電腦用的是 `main` 分支。** `main` 有保護：協作者不能直接改，只能「提案」（Pull Request），**由專案擁有者看過、按 Merge 才會上線**。所以協作者怎麼改、怎麼試，都不會影響現場。
+
+### 協作者（開發的人）
+1. **先在後台測試。** 測試不需要上傳：
+   - 打開後台頁面 → F12 開發人員工具 → Console，把修改後的整個檔案內容貼上執行，看效果（只影響自己這個分頁）。
    - 或用 Claude（Claude Code ＋ Claude in Chrome）幫你注入測試。
-2. 上傳：GitHub 專案頁 → `Add file` → `Upload files`，拖入改好的檔案（同名會覆蓋）→ `Commit changes`。
-3. 約 1 分鐘後，打開 `https://david840822-create.github.io/marco-tools/檔名.js` 確認是新內容，再到後台按書籤實測一次。
-4. 改壞了：GitHub 專案頁 → `History` 找到上一版 → 把舊內容貼回去上傳即可。
+2. 上傳到**自己的分支**：GitHub 專案頁 → `Add file` → `Upload files` → 拖入檔案 → 下方選「**Create a new branch for this commit and start a pull request**」→ 分支名稱例如 `改善-檢查待接單` → `Propose changes`。
+3. 在 Pull Request 寫清楚：改了什麼、為什麼、怎麼測過的（最好附截圖）。
+4. 等擁有者核准。
+
+### 擁有者（最終決定上線的人）
+1. GitHub 專案頁 → `Pull requests` → 點開提案 → `Files changed` 看改了哪裡。
+2. 要上線：按 `Merge pull request` → `Confirm merge`。約 1 分鐘後三台電腦生效。
+3. 上線後到後台按書籤實測一次。
+4. 改壞了要退回：在那個已合併的 Pull Request 頁面按 `Revert` → 再 Merge 那個退回提案，就回到上一版。
 
 ### 測試的規矩
 - **接單按下去不能取消、不能退回。** 測「接單」只能用測試客戶的訂單，或事先經負責人同意的那一筆。
@@ -94,11 +103,13 @@ accept.js ⇄ Google Apps Script 網路程式 ⇄ Google 試算表「馬可小�
 
 | 東西 | 擁有者 | 協作方式 |
 |---|---|---|
-| GitHub 專案 `marco-tools` | 專案負責人 | Settings → Collaborators 加協作者的 GitHub 帳號 |
+| GitHub 專案 `marco-tools` | 專案負責人（唯一管理員） | Settings → Collaborators 加協作者；協作者只能開 Pull Request，`main` 由擁有者 Merge |
 | Google 試算表＋Apps Script | 專案負責人的 Google 帳號 | 試算表「共用」加對方 Gmail 為編輯者（編輯者也能改 Apps Script） |
 | 馬可後台 | 各自的後台帳號 | 測試要有「車次分配」「接單」權限 |
 
-- **能改 GitHub 的人，就能改三台電腦上按鈕的行為** → 請開兩步驟驗證，只加信任的人。
+- **`main` 分支保護**（擁有者設定一次）：Settings → Rules → Rulesets → New branch ruleset：名稱「保護正式版」、Enforcement＝Active、Bypass list 加 `Repository admin`、Target 選 `Include default branch`、勾 `Restrict deletions`、`Require a pull request before merging`（Required approvals＝1）、`Block force pushes` → Create。
+- 只有擁有者能改 Settings、加減協作者、刪除專案。協作者離開時：Settings → Collaborators → Remove。
+- **能 Merge 到 main 的人，就能改三台電腦上按鈕的行為** → 擁有者請開兩步驟驗證。
 - 這個專案是**公開的**（GitHub Pages 免費版需要公開）：**不要放密碼、token、個人信箱、客戶資料**。
 - 不要直接用後台的登入 token 呼叫 API；工具一律透過後台自己的頁面操作。
 
