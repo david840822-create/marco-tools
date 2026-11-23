@@ -43,7 +43,7 @@ price.js ⇄ Apps Script 網路程式（專案「每日報價自動備份」，�
 |---|---|
 | `mk.js` | 功能選單。書籤每次都抓它。要加新功能：在 `ITEMS` 加一項，新功能寫成獨立的 `xxx.js` |
 | `accept.js` | 檢查待接單（含送審、接單） |
-| `print.js` | 產生出貨單（含自動分配車次）。檔案前面的 `NO_PRICE`＝預算制客戶（不印單價／金額／總價）、`PRICE_NOTE`＝右側備註欄文字、`COL_W`＝欄寬 |
+| `print.js` | 產生出貨單（含自動分配車次）。版面：上方司機區（車號、客戶、日期、配送／訂單備註）、中間品項、右側備註框、底部公司資料＋合計。檔案前面的 `NO_PRICE`＝預算制客戶（不印單價／金額／合計）、`PRICE_NOTE`／`NOPRICE_NOTE`＝右側備註框文字、`COMPANY`＝公司名稱與電話、`COL_W`＝欄寬 |
 | `price.js` | 更新批次價格。檔案前面的 `PRICE_API`＝價格網路程式網址 |
 | `apps-script/price-feed.gs` | 讀「當天」價格檔的 Apps Script。**這裡只是備份**，真正執行的在 Apps Script 專案「每日報價自動備份」（和每天 17:00 的備份程式同一個專案） |
 | `apps-script/ok-list.gs` | 常態 OK 清單的 Google Apps Script（綁在試算表上）。**這裡只是備份**，真正執行的在試算表「擴充功能 → Apps Script」 |

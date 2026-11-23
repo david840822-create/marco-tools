@@ -63,72 +63,101 @@
     return { letter: L, num: parseInt(m[2], 10), label: L + String(m[2]).padStart(2, '0') };
   }
 
+
   /* ---------- 出貨單客製（要改名單或文字，改這裡就好） ----------
-   * NO_PRICE   預算制客戶：出貨單不印單價、金額、總價。客戶名稱（去掉空白）「包含」其中一個就算。
-   * PRICE_NOTE 其他客戶：右側備註欄印的說明（\n 換行）。
-   * COL_W      欄寬：序號、品名、數量/單位、單價、金額、備註（加起來 100%）。 */
+   * 版面原則（2026-11-24 重排）：一張 A5 給兩種人看
+   *   上方「司機區」：車號、客戶名稱、配送日期最大；配送備註／訂單備註有寫才出現（加粗加框）；地址、收件人小字一行。
+   *   中間「客人區」：品名、數量、單價、金額，數字去掉多餘的 .0；右側備註框說明價格與秤重。
+   *   最下方：合計（右）＋公司名稱、地址、電話（左，小字）。
+   * NO_PRICE      預算制客戶：不印單價、金額、合計。客戶名稱（去掉空白）「包含」其中一個就算。
+   * PRICE_NOTE    一般客戶右側備註框（\n 換行，第一行加粗）。
+   * NOPRICE_NOTE  預算制客戶右側備註框。
+   * COMPANY       公司名稱（空白＝用後台的供應商名稱）、電話。
+   * COL_W         欄寬：序號、品名、數量/單位、單價、金額、備註（加起來 100%）。 */
   var NO_PRICE = ['勝智老人長期照顧中心', '慈恩老人養護中心', '佳恩(清泉)長照', '潭秀幼兒園', '廍子幼兒園'];
-  var PRICE_NOTE = '※ 價格僅供核對\n代購等品項價格可能調整，實際金額以系統帳單為準。';
-  var COL_W = ['4%', '30%', '24%', '8%', '9%', '25%'];
-  var MK_CSS = '.product-table td.mk-note-td{border:0!important;padding:0 0 0 6px!important;vertical-align:top!important}'
-    + '.product-table thead th.mk-note-h{padding-left:6px!important}'
-    + '.mk-note-box{border:0.5px solid #000;border-radius:2px;padding:2px 5px;margin-top:2px;font-size:10.5px;line-height:1.35;color:#000;font-weight:400;text-align:left;white-space:normal;word-break:break-all}'
-    + '.mk-note-box b{font-weight:700}'
-    /* 長品名、長單位：自動換行，不會擠到隔壁欄 */
-    + '.product-table tbody td{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word}'
-    /* 抬頭（自己重排）：
-         蔬鄉 地址 電話（小字一行）
-         客戶名稱（大）｜配送日期 月/日（大）｜車號 n車（大）
-         送貨地址 …………………… 收件人 ……
-         配送備註（有寫就加粗）
-         訂單備註（有寫就加粗） */
-    + '.mk-head{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif;color:#000;text-align:left;font-weight:400}'
-    + '.mk-top{font-size:11px;padding:1px 4px;border-bottom:1px solid #000;white-space:nowrap;overflow:hidden}'
-    + '.mk-top b{font-weight:700;margin-right:8px}.mk-top span{margin-right:10px}'
-    + '.mk-row1{display:grid;grid-template-columns:1fr auto auto;border-bottom:1px solid #000}'
-    + '.mk-row1>div{padding:2px 8px;display:flex;flex-direction:column;justify-content:center}'
-    + '.mk-row1>div+div{border-left:1px solid #000}'
-    + '.mk-lbl{font-size:11px;font-weight:400;line-height:1.2}'
-    + '.mk-big{font-size:21px;font-weight:700;line-height:1.25}'
-    + '.mk-car{font-size:30px;font-weight:700;align-items:center;min-width:82px;white-space:nowrap}'
-    + '.mk-info{padding:2px 4px;font-size:12px;line-height:1.45}'
-    + '.mk-r{display:flex;gap:6px;align-items:baseline}'
-    + '.mk-r .mk-k{flex:0 0 auto;font-size:11px}'
-    + '.mk-r .mk-v{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}'
-    + '.mk-r .mk-rcv{flex:0 1 auto;max-width:40%;overflow-wrap:anywhere}'
-    + '.mk-r.mk-hot .mk-k,.mk-r.mk-hot .mk-v{font-weight:700}.mk-r.mk-hot .mk-v{font-size:14px}';
+  var PRICE_NOTE = '※ 價格僅供核對\n・秤重計價的品項（雞鴨、肉品、海鮮等），依出貨時實際秤重計價，單上的數量、金額可能與實際不同。\n・代購等品項價格可能調整。\n實際金額以系統帳單為準。';
+  var NOPRICE_NOTE = '※ 秤重計價的品項\n（雞鴨、肉品、海鮮等）依出貨時實際秤重，數量可能與單上不同。';
+  var COMPANY = { name: '蔬鄉合作社', phone: '04-25603868' };
+  var COL_W = ['5%', '34%', '15%', '10%', '12%', '24%'];
   var CAR_NUM = true; /* 車號方塊改顯示：A→1車、B→2車、C→3車… */
 
-  /* 重排抬頭。讀不到必要欄位就保留後台原本的樣子，不冒險。 */
+  var MK_CSS = ''
+    /* 整張單：字型、表格線 */
+    + '.product-section{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif!important;color:#000}'
+    + '.product-table{border-collapse:collapse!important}'
+    + '.product-table thead tr.customer-header th{font-size:11px!important;font-weight:400!important;border-top:0!important;border-bottom:1px solid #000!important;padding:2px 4px!important;white-space:nowrap}'
+    + '.product-table tbody td{font-size:12.5px!important;padding:2px 4px!important;border:0!important;border-bottom:0.5px dotted #999!important;white-space:normal!important;overflow-wrap:anywhere;word-break:break-word;vertical-align:top}'
+    + '.product-table tbody tr:last-child td{border-bottom:0!important}'
+    + '.product-table .col-sequence{text-align:center!important;color:#555}'
+    + '.product-table .col-product{text-align:left!important}'
+    + '.product-table thead tr.customer-header th.col-quantity,.product-table tbody td.mk-qty{text-align:right!important;padding-right:10px!important}'
+    + '.product-table .col-price,.product-table .col-amount{text-align:right!important}'
+    + '.product-table td.mk-qty .mk-u{margin-left:2px}'
+    /* 右側備註框 */
+    + '.product-table td.mk-note-td{border:0!important;padding:0 0 0 8px!important;vertical-align:top!important}'
+    + '.product-table thead th.mk-note-h{padding-left:8px!important;text-align:left!important}'
+    + '.mk-note-box{border:0.5px solid #000;border-radius:3px;padding:3px 6px;margin-top:2px;font-size:10px;line-height:1.4;color:#000;font-weight:400;text-align:left;white-space:normal;word-break:break-all}'
+    + '.mk-note-box b{font-weight:700;font-size:10.5px}'
+    + '.mk-note-box .mk-nl{display:block;margin-top:1px}'
+    /* 司機區 */
+    + '.product-table thead tr.supplier-header th{padding:0 0 3px 0!important;border:0!important}'
+    + '.mk-head{text-align:left;font-weight:400;color:#000}'
+    + '.mk-d1{display:grid;grid-template-columns:auto 1fr auto;align-items:stretch;border:1.5px solid #000;border-radius:3px;overflow:hidden}'
+    + '.mk-car{background:#000;color:#fff;font-size:26px;font-weight:700;padding:0 12px;display:flex;align-items:center;justify-content:center;min-width:70px;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + '.mk-cust{padding:2px 10px;display:flex;flex-direction:column;justify-content:center;min-width:0}'
+    + '.mk-big{font-size:21px;font-weight:700;line-height:1.2;overflow-wrap:anywhere}'
+    + '.mk-date{padding:2px 12px;border-left:1.5px solid #000;display:flex;flex-direction:column;align-items:center;justify-content:center;white-space:nowrap}'
+    + '.mk-lbl{font-size:10px;font-weight:400;line-height:1.1;color:#333}'
+    + '.mk-date .mk-dv{font-size:21px;font-weight:700;line-height:1.15}'
+    + '.mk-hot{display:flex;gap:6px;align-items:baseline;margin-top:3px;border:1px solid #000;border-left:5px solid #000;border-radius:2px;padding:2px 6px;font-size:14px;font-weight:700;line-height:1.35}'
+    + '.mk-hot .mk-tag{flex:0 0 auto;font-size:10.5px;font-weight:700;white-space:nowrap}'
+    + '.mk-hot .mk-tx{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}'
+    + '.mk-addr{display:flex;gap:12px;margin:3px 0 2px;font-size:11px;line-height:1.35;color:#000}'
+    + '.mk-addr .mk-a{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}'
+    + '.mk-addr .mk-rc{flex:0 1 auto;max-width:45%;overflow-wrap:anywhere;text-align:right}'
+    + '.mk-addr .mk-k{color:#444;margin-right:4px}'
+    /* 頁尾：公司資料（左）＋合計（右） */
+    + '.mk-foot{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;border-top:1px solid #000;margin-top:2px;padding:3px 4px 0;font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif;color:#000}'
+    + '.mk-co{font-size:10px;line-height:1.35;color:#222}.mk-co b{font-size:13.5px;color:#000;margin-right:8px;letter-spacing:1px}.mk-co span{margin-right:8px;white-space:nowrap}'
+    + '.mk-tot{font-size:11px;white-space:nowrap;text-align:right}.mk-tot span{margin-left:10px}.mk-tot b{font-size:15px;margin-left:4px}';
+
+  function val(x) { return x && x !== '-' ? x : ''; }
+  /* 數字整理：1.00 → 1、450.0 → 450、1,250.0 → 1,250、393.30 → 393.3 */
+  function tidyNum(s) {
+    return String(s).replace(/(\d)\.(\d*?)0+(?=\D|$)/g, function (m, a, b) { return a + (b ? '.' + b : ''); });
+  }
+
+  /* 重排抬頭（司機區）。讀不到必要欄位就保留後台原本的樣子，不冒險。 */
   function headerV2(sec) {
     var th = sec.querySelector('thead tr.supplier-header > th');
-    if (!th) return;
+    if (!th) return null;
     var info = {};
     [].forEach.call(th.querySelectorAll('.info-item'), function (it) {
       var l = it.querySelector('.info-label'), v = it.querySelector('.info-value');
       if (l) info[l.textContent.replace(/\s+/g, '')] = v ? v.textContent.replace(/\s+/g, ' ').trim() : '';
     });
-    if (!('客戶名稱' in info) || !('配送日期' in info) || !('送貨地址' in info)) return;
+    if (!('客戶名稱' in info) || !('配送日期' in info) || !('送貨地址' in info)) return null;
     function g(sel) { var e = th.querySelector(sel); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; }
+    var co = { name: COMPANY.name || g('.supplier-name'), addr: g('.supplier-addr'), phone: COMPANY.phone || g('.supplier-phone') };
     var carEl = th.querySelector('.car-number');
     var car = carEl ? carEl.textContent.trim() : '';
     var m = /^([A-Za-z])$/.exec(car);
     if (CAR_NUM && m) car = (m[1].toUpperCase().charCodeAt(0) - 64) + '車';
     var dm = /(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/.exec(info['配送日期']);
     var date = dm ? (+dm[2]) + '/' + (+dm[3]) : info['配送日期'];
-    function val(x) { return x && x !== '-' ? x : ''; }
-    function row(k, v, hot) { return '<div class="mk-r' + (hot && val(v) ? ' mk-hot' : '') + '"><span class="mk-k">' + k + '</span><span class="mk-v">' + esc(val(v) || '-') + '</span></div>'; }
+    function hot(k, v) { return val(v) ? '<div class="mk-hot"><span class="mk-tag">' + k + '</span><span class="mk-tx">' + esc(v) + '</span></div>' : ''; }
     th.innerHTML = '<div class="mk-head">'
-      + '<div class="mk-top"><b>' + esc(g('.supplier-name')) + '</b><span>' + esc(g('.supplier-addr')) + '</span><span>' + esc(g('.supplier-phone')) + '</span></div>'
-      + '<div class="mk-row1"><div><span class="mk-lbl">客戶名稱</span><div class="mk-big">' + esc(info['客戶名稱']) + '</div></div>'
-      + '<div><span class="mk-lbl">配送日期</span><div class="mk-big">' + esc(date) + '</div></div>'
-      + '<div class="mk-car">' + esc(car) + '</div></div>'
-      + '<div class="mk-info">'
-      + '<div class="mk-r"><span class="mk-k">送貨地址</span><span class="mk-v">' + esc(val(info['送貨地址']) || '-') + '</span>'
-      + (val(info['收件人']) ? '<span class="mk-k">收件人</span><span class="mk-rcv">' + esc(info['收件人']) + '</span>' : '') + '</div>'
-      + row('配送備註', info['配送備註'], true)
-      + row('訂單備註', info['訂單備註'], true)
-      + '</div></div>';
+      + '<div class="mk-d1">'
+      + '<div class="mk-car">' + esc(car || '-') + '</div>'
+      + '<div class="mk-cust"><span class="mk-lbl">客戶名稱</span><div class="mk-big">' + esc(info['客戶名稱']) + '</div></div>'
+      + '<div class="mk-date"><span class="mk-lbl">配送日期</span><span class="mk-dv">' + esc(date) + '</span></div>'
+      + '</div>'
+      + hot('配送備註', info['配送備註'])
+      + hot('訂單備註', info['訂單備註'])
+      + '<div class="mk-addr"><span class="mk-a"><span class="mk-k">送貨地址</span>' + esc(val(info['送貨地址']) || '-') + '</span>'
+      + (val(info['收件人']) ? '<span class="mk-rc"><span class="mk-k">收件人</span>' + esc(info['收件人']) + '</span>' : '') + '</div>'
+      + '</div>';
+    return co;
   }
 
   function nameKey(x) { return String(x || '').replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').toLowerCase(); }
@@ -136,12 +165,12 @@
     var n = nameKey(name);
     return !!n && NO_PRICE.some(function (x) { return x && n.indexOf(nameKey(x)) >= 0; });
   }
-  /* 改出貨單版面：欄位靠攏、右邊多一欄備註；預算制客戶拿掉價格 */
+  /* 改出貨單版面：司機區、欄位、數字、備註欄、頁尾；預算制客戶拿掉價格 */
   function customize(sec, noPrice) {
     var doc = sec.ownerDocument;
     var table = sec.querySelector('table.product-table') || sec.querySelector('table');
     if (!table) return;
-    headerV2(sec);
+    var co = headerV2(sec);
     var cg = table.querySelector('colgroup');
     if (cg) {
       var col = doc.createElement('col'); col.className = 'mk-col-note'; cg.appendChild(col);
@@ -151,13 +180,45 @@
       var n = +th.getAttribute('colspan'); if (n >= 5) th.setAttribute('colspan', n + 1);
     });
     var hr = table.querySelector('thead tr.customer-header') || [].slice.call(table.querySelectorAll('thead tr')).pop();
-    if (hr) { var th = doc.createElement('th'); th.className = 'mk-note-h'; th.textContent = noPrice ? '' : '備註'; hr.appendChild(th); }
+    if (hr) {
+      var q = hr.querySelector('th.col-quantity'); if (q) q.textContent = '數量';
+      var s0 = hr.querySelector('th.col-sequence'); if (s0) s0.textContent = '#';
+      var th = doc.createElement('th'); th.className = 'mk-note-h'; th.textContent = '備註'; hr.appendChild(th);
+    }
     [].forEach.call(table.querySelectorAll('tbody tr'), function (tr) {
+      var tds = tr.children;
+      if (tds.length >= 5) {
+        tds[0].classList.add('col-sequence'); tds[1].classList.add('col-product');
+        var qty = tds[2]; qty.classList.add('mk-qty');
+        var sp = qty.querySelectorAll('span');
+        if (sp.length >= 2) { sp[0].textContent = tidyNum(sp[0].textContent.trim()); sp[1].className = 'mk-u'; }
+        else qty.textContent = tidyNum(qty.textContent.trim());
+        [].forEach.call(tr.querySelectorAll('td.col-price, td.col-amount'), function (c) { c.textContent = tidyNum(c.textContent.trim()); });
+      }
       var td = doc.createElement('td'); td.className = 'mk-note-td'; tr.appendChild(td);
     });
+    /* 頁尾：合計＋公司資料（取代後台的「貨品總價／運費／總計」那一列） */
+    var tot = '';
+    var sum = sec.querySelector('.summary-section');
+    if (sum && !noPrice) {
+      var items = {};
+      [].forEach.call(sum.querySelectorAll('.summary-item'), function (it) {
+        var k = it.querySelector('.col-span-item'), v = it.querySelector('.info-value');
+        if (k && v) items[k.textContent.replace(/\s+/g, '')] = tidyNum(v.textContent.replace(/\s+/g, ' ').trim());
+      });
+      var ship = items['運費'] || '';
+      var hasShip = ship && !/^NT\$?\s*0$/.test(ship.replace(/\s+/g, ' '));
+      if (items['總計']) tot = (hasShip ? '<span>貨品 ' + esc(items['貨品總價'] || '') + '</span><span>運費 ' + esc(ship) + '</span>' : '') + '<span>合計<b>' + esc(items['總計']) + '</b></span>';
+    }
+    [].forEach.call(sec.querySelectorAll('.summary-section'), function (el) { el.remove(); });
+    if (co) {
+      var foot = doc.createElement('div'); foot.className = 'mk-foot';
+      foot.innerHTML = '<div class="mk-co"><b>' + esc(co.name || '') + '</b>' + (co.addr ? '<span>' + esc(co.addr) + '</span>' : '') + (co.phone ? '<span>電話 ' + esc(co.phone) + '</span>' : '') + '</div>'
+        + '<div class="mk-tot">' + tot + '</div>';
+      sec.appendChild(foot);
+    }
     if (noPrice) {
       [].forEach.call(table.querySelectorAll('th.col-price, th.col-amount, td.col-price, td.col-amount'), function (el) { el.textContent = ''; });
-      [].forEach.call(sec.querySelectorAll('.summary-section'), function (el) { el.remove(); });
       sec.setAttribute('data-mk-noprice', '1');
     }
   }
@@ -168,13 +229,16 @@
     var sec = t.content.firstElementChild;
     if (!sec) return html;
     var cells = sec.querySelectorAll('tbody td.mk-note-td');
-    if (!cells.length || sec.getAttribute('data-mk-noprice')) return html;
+    if (!cells.length) return html;
     cells[0].setAttribute('rowspan', cells.length);
-    var lines = PRICE_NOTE.split('\n');
-    cells[0].innerHTML = '<div class="mk-note-box"><b>' + esc(lines[0]) + '</b>' + lines.slice(1).map(function (l) { return '<br>' + esc(l); }).join('') + '</div>';
+    var lines = (sec.getAttribute('data-mk-noprice') ? NOPRICE_NOTE : PRICE_NOTE).split('\n');
+    cells[0].innerHTML = '<div class="mk-note-box"><b>' + esc(lines[0]) + '</b>' + lines.slice(1).map(function (l, i) {
+      return '<span class="mk-nl"' + (i === lines.length - 2 && lines.length > 2 ? ' style="font-weight:700"' : '') + '>' + esc(l) + '</span>';
+    }).join('') + '</div>';
     for (var i = 1; i < cells.length; i++) cells[i].remove();
     return sec.outerHTML;
   }
+
 
   /* ---------- 長訂單分頁：每一頁都有完整抬頭 ----------
    * 紙張 210×140mm、邊界 2mm → 可印區 206×136mm。
