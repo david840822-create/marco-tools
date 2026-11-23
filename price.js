@@ -360,7 +360,7 @@
 
   function showBatches() {
     if (!getKey()) { askKey(); return; }
-    var html = '<div style="font-size:13px;color:#666">勾選要更新價格的批次，會用<b>今天的價格檔</b>（每天約 17:00 產生）直接匯入。</div>';
+    var html = '<div style="font-size:13px;color:#666">勾選要更新價格的批次，會用<b>今天的價格檔</b>（每天約 17:00 產生）直接匯入。凌晨 0～6 點按，用的是前一天 17:00 的價格檔。</div>';
     var lastDate = null;
     batches.forEach(function (b) {
       if (b.date !== lastDate) {

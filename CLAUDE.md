@@ -28,7 +28,8 @@
 - 協作者不要直接重新部署正式的 Apps Script；修改先寫進 `apps-script/ok-list.gs` 開 Pull Request，由擁有者部署。
 
 ## 更新批次價格（price.js ＋ apps-script/price-feed.gs）
-- 價格**一定要用當天的**價格檔（「每日報價自動備份」每天 17:00 產生）；當天的檔還沒產生就停下，不能拿舊檔代替。
+- 價格**一定要用當天的**價格檔（「每日報價自動備份」每天 17:00 產生）；當天的檔還沒產生就停下，不能拿舊檔代替。「當天」＝作業日：凌晨 0～6 點算前一天（price-feed.gs 的 loadTodayPrices_）。
+- **在 Apps Script 編輯器按「執行」前，一定要先確認函式下拉選單選對了。** 選錯會執行 archiveDailyQuote，提早建立當天價格檔，害 17:00 的備份被略過（曾經發生過，事後把誤建的檔改名處理）。
 - 價格密碼 `PRICE_KEY` 只由負責人在 Apps Script 指令碼屬性設定、各台電腦自己輸入。**Claude 不輸入密碼**，也不能把密碼寫進程式或 GitHub。
 - 測試不用密碼：在後台注入 price.js，暫時把 `fetch` 對 script.google.com 的請求換成本機轉好的價格 JSON（同一天的價格檔），跑完要還原 `fetch` 並刪掉測試用的 `mk-price-key`。只能用「同一天的價格檔 ＋ 同一天的批次」測試。
 - 先做「只匯出不匯入」的試算（`__MK_PRICE_TEST` 拿內部函式），確認會變動的品項，再匯入。
