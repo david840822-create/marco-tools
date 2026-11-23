@@ -76,40 +76,59 @@
     + '.mk-note-box b{font-weight:700}'
     /* 長品名、長單位：自動換行，不會擠到隔壁欄 */
     + '.product-table tbody td{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word}'
-    /* 抬頭：只留 客戶名稱｜配送日期｜車號 */
-    + '.customer-section .customer-grid.mk-grid{grid-template-columns:1fr auto auto!important}'
-    + '.customer-grid.mk-grid .info-item{padding:3px 10px!important}'
-    + '.customer-grid.mk-grid .mk-name .info-value{font-size:20px!important;font-weight:700!important}'
-    + '.customer-grid.mk-grid .mk-date .info-value{font-size:20px!important;font-weight:700!important}'
-    + '.customer-grid.mk-grid .info-item.car-number{font-size:32px!important;min-width:88px;white-space:nowrap;font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif!important;font-weight:700!important}'
-    + '.delivery-section.mk-ds .delivery-address:first-child{max-width:74%!important;flex:1 1 auto}'
-    + '.mk-hot .info-label{font-weight:700!important}'
-    + '.mk-hot .info-value{font-size:14px!important;font-weight:700!important}';
+    /* 抬頭（自己重排）：
+         蔬鄉 地址 電話（小字一行）
+         客戶名稱（大）｜配送日期 月/日（大）｜車號 n車（大）
+         送貨地址 …………………… 收件人 ……
+         配送備註（有寫就加粗）
+         訂單備註（有寫就加粗） */
+    + '.mk-head{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif;color:#000;text-align:left;font-weight:400}'
+    + '.mk-top{font-size:11px;padding:1px 4px;border-bottom:1px solid #000;white-space:nowrap;overflow:hidden}'
+    + '.mk-top b{font-weight:700;margin-right:8px}.mk-top span{margin-right:10px}'
+    + '.mk-row1{display:grid;grid-template-columns:1fr auto auto;border-bottom:1px solid #000}'
+    + '.mk-row1>div{padding:2px 8px;display:flex;flex-direction:column;justify-content:center}'
+    + '.mk-row1>div+div{border-left:1px solid #000}'
+    + '.mk-lbl{font-size:11px;font-weight:400;line-height:1.2}'
+    + '.mk-big{font-size:21px;font-weight:700;line-height:1.25}'
+    + '.mk-car{font-size:30px;font-weight:700;align-items:center;min-width:82px;white-space:nowrap}'
+    + '.mk-info{padding:2px 4px;font-size:12px;line-height:1.45}'
+    + '.mk-r{display:flex;gap:6px;align-items:baseline}'
+    + '.mk-r .mk-k{flex:0 0 auto;font-size:11px}'
+    + '.mk-r .mk-v{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}'
+    + '.mk-r .mk-rcv{flex:0 1 auto;max-width:40%;overflow-wrap:anywhere}'
+    + '.mk-r.mk-hot .mk-k,.mk-r.mk-hot .mk-v{font-weight:700}.mk-r.mk-hot .mk-v{font-size:14px}';
   var CAR_NUM = true; /* 車號方塊改顯示：A→1車、B→2車、C→3車… */
 
-  function lab(it) { var l = it.querySelector('.info-label'); return l ? l.textContent.replace(/\s+/g, '') : ''; }
-  /* 抬頭大調整：拿掉客戶編號、配送時段；日期放大；有填的配送備註／訂單備註加粗；車號改數字 */
+  /* 重排抬頭。讀不到必要欄位就保留後台原本的樣子，不冒險。 */
   function headerV2(sec) {
-    var grid = sec.querySelector('.customer-grid');
-    if (grid) {
-      grid.classList.add('mk-grid');
-      [].slice.call(grid.querySelectorAll('.info-item')).forEach(function (it) {
-        var l = lab(it);
-        if (l === '客戶編號' || l === '配送時段') it.remove();
-        else if (l === '客戶名稱') it.classList.add('mk-name');
-        else if (l === '配送日期') it.classList.add('mk-date');
-      });
-      var car = grid.querySelector('.car-number');
-      var m = car && /^\s*([A-Za-z])\s*$/.exec(car.textContent);
-      if (CAR_NUM && m) car.textContent = (m[1].toUpperCase().charCodeAt(0) - 64) + '車';
-    }
-    var ds = sec.querySelector('.delivery-section');
-    if (ds) ds.classList.add('mk-ds');
-    [].forEach.call(sec.querySelectorAll('.delivery-section .info-item'), function (it) {
-      var l = lab(it), v = it.querySelector('.info-value');
-      var t = v ? v.textContent.trim() : '';
-      if ((l === '配送備註' || l === '訂單備註') && t && t !== '-') it.classList.add('mk-hot');
+    var th = sec.querySelector('thead tr.supplier-header > th');
+    if (!th) return;
+    var info = {};
+    [].forEach.call(th.querySelectorAll('.info-item'), function (it) {
+      var l = it.querySelector('.info-label'), v = it.querySelector('.info-value');
+      if (l) info[l.textContent.replace(/\s+/g, '')] = v ? v.textContent.replace(/\s+/g, ' ').trim() : '';
     });
+    if (!('客戶名稱' in info) || !('配送日期' in info) || !('送貨地址' in info)) return;
+    function g(sel) { var e = th.querySelector(sel); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; }
+    var carEl = th.querySelector('.car-number');
+    var car = carEl ? carEl.textContent.trim() : '';
+    var m = /^([A-Za-z])$/.exec(car);
+    if (CAR_NUM && m) car = (m[1].toUpperCase().charCodeAt(0) - 64) + '車';
+    var dm = /(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/.exec(info['配送日期']);
+    var date = dm ? (+dm[2]) + '/' + (+dm[3]) : info['配送日期'];
+    function val(x) { return x && x !== '-' ? x : ''; }
+    function row(k, v, hot) { return '<div class="mk-r' + (hot && val(v) ? ' mk-hot' : '') + '"><span class="mk-k">' + k + '</span><span class="mk-v">' + esc(val(v) || '-') + '</span></div>'; }
+    th.innerHTML = '<div class="mk-head">'
+      + '<div class="mk-top"><b>' + esc(g('.supplier-name')) + '</b><span>' + esc(g('.supplier-addr')) + '</span><span>' + esc(g('.supplier-phone')) + '</span></div>'
+      + '<div class="mk-row1"><div><span class="mk-lbl">客戶名稱</span><div class="mk-big">' + esc(info['客戶名稱']) + '</div></div>'
+      + '<div><span class="mk-lbl">配送日期</span><div class="mk-big">' + esc(date) + '</div></div>'
+      + '<div class="mk-car">' + esc(car) + '</div></div>'
+      + '<div class="mk-info">'
+      + '<div class="mk-r"><span class="mk-k">送貨地址</span><span class="mk-v">' + esc(val(info['送貨地址']) || '-') + '</span>'
+      + (val(info['收件人']) ? '<span class="mk-k">收件人</span><span class="mk-rcv">' + esc(info['收件人']) + '</span>' : '') + '</div>'
+      + row('配送備註', info['配送備註'], true)
+      + row('訂單備註', info['訂單備註'], true)
+      + '</div></div>';
   }
 
   function nameKey(x) { return String(x || '').replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').toLowerCase(); }
