@@ -292,7 +292,7 @@
       var res = o.result ? '<div style="font-weight:700;color:' + (o.result.ok ? '#1b5e20' : '#b71c1c') + ';">' + esc(o.result.msg) + '</div>' : '';
       return '<tr style="border-top:1px solid #eee;' + (o.result && o.result.ok ? 'opacity:.55;' : '') + '">' +
         '<td style="padding:6px 4px;vertical-align:top;"><input type="checkbox" class="mk-ac-cb" data-o="' + o.id + '"' + (o.checked ? ' checked' : '') + (o.result && o.result.ok ? ' disabled' : '') + ' style="width:18px;height:18px;"></td>' +
-        '<td style="padding:6px 4px;vertical-align:top;word-break:break-all;"><b>' + esc(o.d.customer) + '</b><div style="color:#888;font-size:12px;">' + esc(o.d.no || o.no) + '</div></td>' +
+        '<td style="padding:6px 4px;vertical-align:top;word-break:break-all;"><b>' + esc(o.d.customer) + '</b> <button class="mk-ac-copy" data-o="' + o.id + '" title="複製客戶名稱，到 LINE 貼上搜尋" style="font:12px inherit;padding:0 6px;cursor:pointer;white-space:nowrap;">📋 複製</button><div style="color:#888;font-size:12px;">' + esc(o.d.no || o.no) + '</div></td>' +
         '<td style="padding:6px 4px;vertical-align:top;">' + (o.d.notes.length ? notes : '<span style="color:#888;">沒有備註</span>') + res + '</td>' +
         '<td style="padding:6px 4px;vertical-align:top;"><a href="/order/detail/' + o.id + '" target="_blank" style="color:#2e7d4f;">查看</a></td></tr>';
     }
@@ -308,10 +308,30 @@
     [].forEach.call(document.querySelectorAll('.mk-ac-cb'), function (cb) {
       cb.onchange = function () { var o = byId(cb.dataset.o); if (o) o.checked = cb.checked; renderFoot(); };
     });
+    [].forEach.call(document.querySelectorAll('.mk-ac-copy'), function (b) {
+      b.onclick = function () { var o = byId(b.dataset.o); if (o) copyText(o.d.customer, b); };
+    });
     [].forEach.call(document.querySelectorAll('.mk-ac-sub'), function (b) {
       b.onclick = function () { openSubmit(byId(b.dataset.o), +b.dataset.k, b); };
     });
     renderFoot();
+  }
+  /* 複製客戶名稱（給小姐貼到 LINE 搜尋） */
+  function copyText(t, b) {
+    function done(ok) {
+      b.textContent = ok ? '✓ 已複製' : '複製失敗';
+      b.style.background = ok ? '#d9f2d9' : '#fde2e1';
+      setTimeout(function () { b.textContent = '📋 複製'; b.style.background = ''; }, 1500);
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = t; ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove(); done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function () { done(true); }, fallback);
+    else fallback();
   }
   function byId(id) { return orders.find(function (o) { return o.id === id; }); }
 

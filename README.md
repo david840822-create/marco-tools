@@ -39,7 +39,7 @@ accept.js ⇄ Google Apps Script 網路程式 ⇄ Google 試算表「馬可小�
 |---|---|
 | `mk.js` | 功能選單。書籤每次都抓它。要加新功能：在 `ITEMS` 加一項，新功能寫成獨立的 `xxx.js` |
 | `accept.js` | 檢查待接單（含送審、接單） |
-| `print.js` | 產生出貨單（含自動分配車次） |
+| `print.js` | 產生出貨單（含自動分配車次）。檔案前面的 `NO_PRICE`＝預算制客戶（不印單價／金額／總價）、`PRICE_NOTE`＝右側備註欄文字、`COL_W`＝欄寬 |
 | `apps-script/ok-list.gs` | 常態 OK 清單的 Google Apps Script（綁在試算表上）。**這裡只是備份**，真正執行的在試算表「擴充功能 → Apps Script」 |
 | `installer/installer.ps1` | 安裝檔的 PowerShell 主體：改 Chrome 書籤檔、重算 checksum |
 | `installer/build-bat.js` | 產生 `installer/安裝馬可小幫手.bat`（需要 Node.js） |

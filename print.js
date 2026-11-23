@@ -63,6 +63,100 @@
     return { letter: L, num: parseInt(m[2], 10), label: L + String(m[2]).padStart(2, '0') };
   }
 
+  /* ---------- 出貨單客製（要改名單或文字，改這裡就好） ----------
+   * NO_PRICE   預算制客戶：出貨單不印單價、金額、總價。客戶名稱（去掉空白）「包含」其中一個就算。
+   * PRICE_NOTE 其他客戶：右側備註欄印的說明（\n 換行）。
+   * COL_W      欄寬：序號、品名、數量/單位、單價、金額、備註（加起來 100%）。 */
+  var NO_PRICE = ['勝智老人長期照顧中心', '慈恩老人養護中心', '佳恩(清泉)長照', '潭秀幼兒園', '廍子幼兒園'];
+  var PRICE_NOTE = '※ 價格僅供核對\n代購等品項價格可能調整，實際金額以系統帳單為準。';
+  var COL_W = ['4%', '30%', '24%', '8%', '9%', '25%'];
+  var MK_CSS = '.product-table td.mk-note-td{border:0!important;padding:0 0 0 6px!important;vertical-align:top!important}'
+    + '.product-table thead th.mk-note-h{padding-left:6px!important}'
+    + '.mk-note-box{border:0.5px solid #000;border-radius:2px;padding:2px 5px;margin-top:2px;font-size:10.5px;line-height:1.35;color:#000;font-weight:400;text-align:left;white-space:normal;word-break:break-all}'
+    + '.mk-note-box b{font-weight:700}'
+    /* 長品名、長單位：自動換行，不會擠到隔壁欄 */
+    + '.product-table tbody td{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word}'
+    /* 抬頭：只留 客戶名稱｜配送日期｜車號 */
+    + '.customer-section .customer-grid.mk-grid{grid-template-columns:1fr auto auto!important}'
+    + '.customer-grid.mk-grid .info-item{padding:3px 10px!important}'
+    + '.customer-grid.mk-grid .mk-name .info-value{font-size:20px!important;font-weight:700!important}'
+    + '.customer-grid.mk-grid .mk-date .info-value{font-size:20px!important;font-weight:700!important}'
+    + '.customer-grid.mk-grid .info-item.car-number{font-size:32px!important;min-width:88px;white-space:nowrap;font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif!important;font-weight:700!important}'
+    + '.delivery-section.mk-ds .delivery-address:first-child{max-width:74%!important;flex:1 1 auto}'
+    + '.mk-hot .info-label{font-weight:700!important}'
+    + '.mk-hot .info-value{font-size:14px!important;font-weight:700!important}';
+  var CAR_NUM = true; /* 車號方塊改顯示：A→1車、B→2車、C→3車… */
+
+  function lab(it) { var l = it.querySelector('.info-label'); return l ? l.textContent.replace(/\s+/g, '') : ''; }
+  /* 抬頭大調整：拿掉客戶編號、配送時段；日期放大；有填的配送備註／訂單備註加粗；車號改數字 */
+  function headerV2(sec) {
+    var grid = sec.querySelector('.customer-grid');
+    if (grid) {
+      grid.classList.add('mk-grid');
+      [].slice.call(grid.querySelectorAll('.info-item')).forEach(function (it) {
+        var l = lab(it);
+        if (l === '客戶編號' || l === '配送時段') it.remove();
+        else if (l === '客戶名稱') it.classList.add('mk-name');
+        else if (l === '配送日期') it.classList.add('mk-date');
+      });
+      var car = grid.querySelector('.car-number');
+      var m = car && /^\s*([A-Za-z])\s*$/.exec(car.textContent);
+      if (CAR_NUM && m) car.textContent = (m[1].toUpperCase().charCodeAt(0) - 64) + '車';
+    }
+    var ds = sec.querySelector('.delivery-section');
+    if (ds) ds.classList.add('mk-ds');
+    [].forEach.call(sec.querySelectorAll('.delivery-section .info-item'), function (it) {
+      var l = lab(it), v = it.querySelector('.info-value');
+      var t = v ? v.textContent.trim() : '';
+      if ((l === '配送備註' || l === '訂單備註') && t && t !== '-') it.classList.add('mk-hot');
+    });
+  }
+
+  function nameKey(x) { return String(x || '').replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').toLowerCase(); }
+  function isNoPrice(name) {
+    var n = nameKey(name);
+    return !!n && NO_PRICE.some(function (x) { return x && n.indexOf(nameKey(x)) >= 0; });
+  }
+  /* 改出貨單版面：欄位靠攏、右邊多一欄備註；預算制客戶拿掉價格 */
+  function customize(sec, noPrice) {
+    var doc = sec.ownerDocument;
+    var table = sec.querySelector('table.product-table') || sec.querySelector('table');
+    if (!table) return;
+    headerV2(sec);
+    var cg = table.querySelector('colgroup');
+    if (cg) {
+      var col = doc.createElement('col'); col.className = 'mk-col-note'; cg.appendChild(col);
+      [].forEach.call(cg.children, function (c, i) { if (COL_W[i]) c.style.setProperty('width', COL_W[i], 'important'); });
+    }
+    [].forEach.call(table.querySelectorAll('thead th[colspan]'), function (th) {
+      var n = +th.getAttribute('colspan'); if (n >= 5) th.setAttribute('colspan', n + 1);
+    });
+    var hr = table.querySelector('thead tr.customer-header') || [].slice.call(table.querySelectorAll('thead tr')).pop();
+    if (hr) { var th = doc.createElement('th'); th.className = 'mk-note-h'; th.textContent = noPrice ? '' : '備註'; hr.appendChild(th); }
+    [].forEach.call(table.querySelectorAll('tbody tr'), function (tr) {
+      var td = doc.createElement('td'); td.className = 'mk-note-td'; tr.appendChild(td);
+    });
+    if (noPrice) {
+      [].forEach.call(table.querySelectorAll('th.col-price, th.col-amount, td.col-price, td.col-amount'), function (el) { el.textContent = ''; });
+      [].forEach.call(sec.querySelectorAll('.summary-section'), function (el) { el.remove(); });
+      sec.setAttribute('data-mk-noprice', '1');
+    }
+  }
+  /* 切頁之後：每一頁的備註欄合併成一格，放說明文字 */
+  function placeNote(html) {
+    var t = document.createElement('template');
+    t.innerHTML = html;
+    var sec = t.content.firstElementChild;
+    if (!sec) return html;
+    var cells = sec.querySelectorAll('tbody td.mk-note-td');
+    if (!cells.length || sec.getAttribute('data-mk-noprice')) return html;
+    cells[0].setAttribute('rowspan', cells.length);
+    var lines = PRICE_NOTE.split('\n');
+    cells[0].innerHTML = '<div class="mk-note-box"><b>' + esc(lines[0]) + '</b>' + lines.slice(1).map(function (l) { return '<br>' + esc(l); }).join('') + '</div>';
+    for (var i = 1; i < cells.length; i++) cells[i].remove();
+    return sec.outerHTML;
+  }
+
   /* ---------- 長訂單分頁：每一頁都有完整抬頭 ----------
    * 紙張 210×140mm、邊界 2mm → 可印區 206×136mm。
    * 用隱藏 iframe 套「列印用 CSS」量每張單的高度，超過一頁就自己切開，
@@ -280,7 +374,10 @@
       var o = orders[i];
       if (!o) return;
       if (o.name && sec.innerText.indexOf(o.name) < 0) res.warns.push('對應可能有誤：' + o.name + '（' + o.orderNo + '）');
-      res.secs.push({ html: sec.outerHTML, o: o, k: carKey(o.car) });
+      o.noPrice = isNoPrice(o.name);
+      var c = sec.cloneNode(true);
+      try { customize(c, o.noPrice); } catch (e) { res.warns.push('版面調整失敗（' + o.name + '）：' + e.message); c = sec; }
+      res.secs.push({ html: c.outerHTML, o: o, k: carKey(o.car) });
     });
     pp.frame.remove();
     return res;
@@ -321,6 +418,7 @@
       (r.secs || []).forEach(function (s) { s.seq = sections.length; sections.push(s); });
     });
     if (cssText === null) cssText = '';
+    cssText += '\n' + MK_CSS;
 
     if (!sections.length) { status('沒有可列印的訂單。\n' + warns.join('\n')); if (win) win.close(); this.disabled = false; this.style.opacity = 1; return; }
 
@@ -358,6 +456,8 @@
     status('檢查品項較多、需要兩頁以上的訂單…');
     try { sections = await paginate(sections, cssText, open, close, wrapperChain && wrapperChain.bodyCls); }
     catch (e) { warns.push('分頁檢查失敗（' + e.message + '），長訂單第 2 頁可能沒有抬頭'); }
+    sections.forEach(function (s) { try { s.html = placeNote(s.html); } catch (e) {} });
+    var noPriceNames = sections.filter(function (s) { return s.o.noPrice && (!s.page || s.page === 1); }).map(function (s) { return s.k.label + ' ' + s.o.name; });
     var multi = sections.filter(function (s) { return s.page === 1 && s.pages > 1; });
     var nPages = sections.length;
 
@@ -374,6 +474,7 @@
       + '</head><body class="' + esc((wrapperChain && wrapperChain.bodyCls) || '') + '">'
       + '<div class="mk-toolbar"><button onclick="window.print()">列印</button>共 <b>' + nCust + '</b> 位客戶、<b>' + nOrders + '</b> 張訂單、<b>' + nPages + '</b> 頁，已依車號排序（同車同客人排在一起）：' + summary
       + (multi.length ? '<div style="margin-top:4px">品項較多、印成多頁的：' + multi.map(function (s) { return esc(s.k.label + ' ' + s.o.name) + '（' + s.pages + ' 頁）'; }).join('、') + '，每頁都有抬頭和「第 X/Y 頁」。</div>' : '')
+      + (noPriceNames.length ? '<div style="margin-top:4px">預算制、<b>不印價格</b>的：' + esc(noPriceNames.join('、')) + '</div>' : '')
       + (allocNotes.length ? '<div style="margin-top:4px;color:#8a5a00">自動分配車次：' + esc(allocNotes.join('　')) + '</div>' : '')
       + (warns.length ? '<div class="mk-warn">⚠ ' + esc(warns.join('\n⚠ ')) + '</div>' : '')
       + '<details><summary style="cursor:pointer;margin-top:6px">查看列印順序</summary><table><tr><td>#</td><td>車次</td><td>客戶</td><td>訂單編號</td><td>批次</td></tr>' + listRows + '</table></details>'
