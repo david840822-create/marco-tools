@@ -2,6 +2,7 @@
  * 書籤每次都會抓這個檔案的最新版；各功能放在同資料夾的獨立檔案，按到才載入：
  *   print.js  產生出貨單（依車號排序，含自動分配車次）
  *   accept.js 檢查待接單（備註檢查＋常態OK清單＋接單）
+ *   price.js  更新批次價格（今天的價格檔 → 匯出檔填價 → 匯入 → 核對）
  */
 (function () {
   if (!/super-marco\.com$/.test(location.hostname)) {
@@ -17,6 +18,7 @@
 
   var ITEMS = [
     { icon: '📋', name: '檢查待接單', desc: '檢查明天的待審核訂單有沒有備註，再一次接單', file: 'accept.js' },
+    { icon: '💲', name: '更新批次價格', desc: '建好批次後按：用今天的價格檔一鍵更新價格（17:00 後）', file: 'price.js' },
     { icon: '🖨️', name: '產生出貨單', desc: '先自動分配車次，再依車號排序列印出貨明細', file: 'print.js' },
     { icon: '📝', name: '常態 OK 清單', desc: '打開 Google 試算表（主管在這裡審核）', url: SHEET_URL }
   ];
