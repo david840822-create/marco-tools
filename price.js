@@ -2,8 +2,9 @@
  * 取代人工流程：批次「匯出訂單金額數量」→ 把當天價格檔「定價」A～L 貼到「盤價-定價」→ 存檔 →
  *               列表頁「匯入訂單金額數量」。
  * 工具做法：
- *   1. 向 Google Apps Script（每日報價自動備份 專案的網路程式）拿「今天」的價格檔內容，
- *      不是今天的就停下（每天約 17:00 產生）。需要密碼，密碼只存在這台電腦的瀏覽器。
+ *   1. 向 Google Apps Script（每日報價自動備份 專案的網路程式）列出最近的價格檔，下拉選單預設最新的；
+ *      選的不是「今天」（作業日：凌晨 0～6 點算前一天）就顯示警示，按更新時再確認一次。
+ *      需要密碼，密碼只存在這台電腦的瀏覽器。
  *   2. 每個勾選的批次：隱藏視窗匯出 Excel（攔下來不存檔）→ 填入「盤價-定價」→
  *      照 Excel 同一套公式算出「訂單資料」N 欄價格並寫進去 → 用列表頁的匯入按鈕匯入 →
  *      再匯出一次，核對後台價格是否跟價格檔一致。
@@ -360,7 +361,9 @@
 
   function showBatches() {
     if (!getKey()) { askKey(); return; }
-    var html = '<div style="font-size:13px;color:#666">勾選要更新價格的批次，會用<b>今天的價格檔</b>（每天約 17:00 產生）直接匯入。凌晨 0～6 點按，用的是前一天 17:00 的價格檔。</div>';
+    var html = '<div style="font-size:13px;color:#666">選價格檔、勾選批次，按下去會直接匯入。價格檔每天約 17:00 產生。</div>' +
+      '<div style="margin-top:8px"><b>價格檔</b> <select id="mk-pfile" style="font:inherit;padding:3px 4px;max-width:250px"><option value="">讀取中…</option></select>' +
+      '<div id="mk-pfwarn" style="margin-top:4px;font-size:13px"></div></div>';
     var lastDate = null;
     batches.forEach(function (b) {
       if (b.date !== lastDate) {
@@ -369,7 +372,7 @@
       }
       html += '<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="mk-pb" value="' + esc(b.id) + '" data-no="' + esc(b.no) + '" data-date="' + esc(b.date) + '"> ' + esc(b.no) + '　<span style="color:#888">' + esc(b.time) + ' ' + esc(b.status) + '</span></label>';
     });
-    html += '<button id="mk-pgo" style="margin-top:10px;width:100%;padding:10px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">更新價格（用今天的價格檔）</button>';
+    html += '<button id="mk-pgo" style="margin-top:10px;width:100%;padding:10px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">更新價格</button>';
     html += '<div style="margin-top:6px;text-align:right"><a href="#" id="mk-pchkey" style="font-size:12px;color:#888">更換價格密碼</a></div>';
     body.innerHTML = html;
     [].forEach.call(panel.querySelectorAll('.mk-pday'), function (a) {
@@ -382,6 +385,52 @@
     });
     panel.querySelector('#mk-pchkey').onclick = function (e) { e.preventDefault(); setKey(''); askKey('請輸入新的價格密碼。'); };
     panel.querySelector('#mk-pgo').onclick = run;
+    panel.querySelector('#mk-pfile').onchange = showFileWarn;
+    loadFileList();
+  }
+
+  /* ---------- 價格檔下拉選單 ---------- */
+  var fileList = null, today = '';
+  function mdLabel(d) { var p = String(d).split('-'); return p.length === 3 ? (+p[1]) + '/' + (+p[2]) : d; }
+  async function api(params) {
+    var r = await fetch(PRICE_API + '?key=' + encodeURIComponent(getKey()) + params, { redirect: 'follow' });
+    return r.json();
+  }
+  async function loadFileList() {
+    var sel = panel.querySelector('#mk-pfile');
+    try {
+      var res = await api('&action=list');
+      if (!res.ok) {
+        if (res.badKey) { setKey(''); askKey('價格密碼不對，請負責人重新輸入。'); return; }
+        sel.innerHTML = '<option value="">讀不到</option>';
+        panel.querySelector('#mk-pfwarn').innerHTML = '<span style="color:#b71c1c">⚠ ' + esc(res.error) + '</span>';
+        return;
+      }
+      fileList = res.files; today = res.today;
+      if (!fileList.length) { sel.innerHTML = '<option value="">沒有價格檔</option>'; showFileWarn(); return; }
+      sel.innerHTML = fileList.map(function (f, i) {
+        return '<option value="' + i + '">' + esc(mdLabel(f.date)) + '　' + esc(((/(\d{3,4})\.xlsx$/.exec(f.name) || [])[1] || f.name)) + (f.date === today ? '（今天）' : '') + '</option>';
+      }).join('');
+      sel.value = '0';
+      showFileWarn();
+    } catch (e) {
+      sel.innerHTML = '<option value="">讀不到</option>';
+      panel.querySelector('#mk-pfwarn').innerHTML = '<span style="color:#b71c1c">⚠ 讀不到價格檔清單：' + esc(e.message) + '</span>';
+    }
+  }
+  function pickedFile() {
+    var v = panel.querySelector('#mk-pfile') && panel.querySelector('#mk-pfile').value;
+    return fileList && v !== '' && v != null ? fileList[+v] : null;
+  }
+  function showFileWarn() {
+    var w = panel.querySelector('#mk-pfwarn'), f = pickedFile();
+    if (!w) return;
+    if (!fileList) return;
+    if (!f) { w.innerHTML = '<span style="color:#b71c1c">⚠ 找不到價格檔</span>'; return; }
+    if (f.date === today) { w.innerHTML = '<span style="color:#1b5e20">✓ 是今天（' + esc(mdLabel(today)) + '）的價格檔</span>'; return; }
+    var newestToday = fileList[0] && fileList[0].date === today;
+    w.innerHTML = '<div style="background:#fdecea;border:1px solid #e57373;color:#b71c1c;border-radius:6px;padding:6px 8px">⚠ 這<b>不是今天（' + esc(mdLabel(today)) + '）</b>的價格檔，是 ' + esc(mdLabel(f.date)) + ' 的。' +
+      (newestToday ? '' : '<br>今天的價格檔還沒產生（每天約 17:00）。') + '</div>';
   }
 
   async function run() {
@@ -392,16 +441,18 @@
     resultEl.innerHTML = '';
     var T0 = Date.now();
     try {
-      status('讀取今天的價格檔…');
-      var r = await fetch(PRICE_API + '?key=' + encodeURIComponent(getKey()), { redirect: 'follow' });
-      var price = await r.json();
+      var pf = pickedFile();
+      if (!pf) { status('請先選價格檔'); return; }
+      if (pf.date !== today && !confirm('選的是 ' + mdLabel(pf.date) + ' 的價格檔，不是今天（' + mdLabel(today) + '）的。\n\n確定要用這個價格檔更新嗎？')) { status('已取消'); return; }
+      status('讀取價格檔 ' + mdLabel(pf.date) + '…');
+      var price = await api('&id=' + encodeURIComponent(pf.id));
       if (!price.ok) {
         if (price.badKey) { setKey(''); askKey('價格密碼不對，請負責人重新輸入。'); status(''); return; }
-        status(''); resultEl.innerHTML = box('#b71c1c', '⚠ ' + esc(price.error) + (price.notYet ? '<br>價格檔每天約 17:00 產生，請晚一點再按。' : ''));
+        status(''); resultEl.innerHTML = box('#b71c1c', '⚠ ' + esc(price.error));
         return;
       }
       var ix = buildPriceIndex(price);
-      var head = '價格檔：' + price.name + '（' + price.rows.length + ' 個商品）';
+      var head = '價格檔：' + price.name + '（' + price.rows.length + ' 個商品）' + (price.date !== today ? '　⚠ 不是今天的' : '');
       var reports = [];
       for (var i = 0; i < picked.length; i++) {
         var b = picked[i], rep = { b: b, warn: [] };
