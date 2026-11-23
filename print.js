@@ -78,7 +78,7 @@
   var PRICE_NOTE = '※ 價格僅供核對\n・秤重計價的品項（雞鴨、肉品、海鮮等），依出貨時實際秤重計價，單上的數量、金額可能與實際不同。\n・代購等品項價格可能調整。\n實際金額以系統帳單為準。';
   var NOPRICE_NOTE = '※ 秤重計價的品項\n（雞鴨、肉品、海鮮等）依出貨時實際秤重，數量可能與單上不同。';
   var COMPANY = { name: '蔬鄉合作社', phone: '04-25603868' };
-  var COL_W = ['4%', '27%', '15%', '8%', '11%', '35%'];
+  var COL_W = ['4%', '27%', '18%', '8%', '11%', '32%'];
   var CAR_NUM = true; /* 車號方塊改顯示：A→1車、B→2車、C→3車… */
 
   var MK_CSS = ''
@@ -90,11 +90,13 @@
     + '.product-table tbody tr:last-child td{border-bottom:0!important}'
     + '.product-table .col-sequence{text-align:center!important;color:#555;padding-left:0!important;padding-right:0!important}'
     + '.product-table .col-product{text-align:left!important}'
-    + '.product-table thead tr.customer-header th.col-quantity,.product-table tbody td.mk-qty{text-align:left!important;padding-left:8px!important;padding-right:2px!important}'
+    + '.product-table tbody td.mk-qty{text-align:left!important;padding-left:8px!important;padding-right:2px!important;white-space:nowrap!important}'
+    /* 「數量」標題對齊單位：8（左留白）＋58（數字框）＋3（間隔）＝69px */
+    + '.product-table thead tr.customer-header th.col-quantity{text-align:left!important;padding-left:69px!important;padding-right:0!important}'
     + '.product-table .col-price,.product-table .col-amount{text-align:right!important}'
-    + '.product-table td.mk-qty .mk-n{display:inline-block!important;width:auto!important;min-width:44px;text-align:right!important;vertical-align:top}'
-    + '.product-table td.mk-qty .mk-u{display:inline-block!important;width:auto!important;text-align:left!important;margin-left:3px;vertical-align:top}'
-    + '.product-table td.mk-qty .mk-ux{display:block;font-size:9.5px;color:#444;line-height:1.2;white-space:nowrap}'
+    + '.product-table td.mk-qty .mk-n{display:inline-block!important;width:auto!important;min-width:58px;text-align:right!important;vertical-align:top}'
+    + '.product-table td.mk-qty .mk-u{display:inline-block!important;width:auto!important;text-align:left!important;margin-left:3px;vertical-align:top;white-space:nowrap}'
+    + '.product-table td.mk-qty .mk-ux{display:inline;font-size:9.5px;color:#333;white-space:nowrap}'
     /* 右側備註框 */
     + '.product-table td.mk-note-td{border:0!important;padding:0 0 0 8px!important;vertical-align:top!important}'
     + '.product-table thead th.mk-note-h{padding-left:8px!important;text-align:left!important}'
@@ -195,10 +197,10 @@
         var sp = qty.querySelectorAll('span');
         if (sp.length >= 2) {
           sp[0].textContent = tidyNum(sp[0].textContent.trim()); sp[0].className = 'mk-n';
-          /* 單位像「條|秤重台斤計價」：主單位照印，後面的說明縮小放第二行 */
+          /* 單位像「條|秤重台斤計價」：文字不改、不換行，「|」後面的說明用小字 */
           var u = sp[1].textContent.trim(), cut = u.indexOf('|');
           sp[1].className = 'mk-u';
-          if (cut > 0) sp[1].innerHTML = esc(u.slice(0, cut)) + '<span class="mk-ux">' + esc(u.slice(cut + 1)) + '</span>';
+          if (cut > 0) sp[1].innerHTML = esc(u.slice(0, cut)) + '<span class="mk-ux">' + esc(u.slice(cut)) + '</span>';
         }
         else qty.textContent = tidyNum(qty.textContent.trim());
         [].forEach.call(tr.querySelectorAll('td.col-price, td.col-amount'), function (c) { c.textContent = tidyNum(c.textContent.trim()); });
