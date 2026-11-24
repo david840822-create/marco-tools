@@ -157,12 +157,13 @@ function priceReminderText_() {
   var day = Utilities.formatDate(workDay_(), TIME_ZONE, 'yyyy-MM-dd');
   var md = Number(day.slice(5, 7)) + '/' + Number(day.slice(8));
   var log = readUpdateLog_(), seen = readSeen_();
-  var todays = Object.keys(seen).filter(function (k) { return seen[k].day === day && !seen[k].stop; }).sort();
+  // 只看每天第一批（有預訂單、要更新價格）：編號最小的那批
+  var todays = Object.keys(seen).filter(function (k) { return seen[k].day === day && !seen[k].stop; }).sort().slice(0, 1);
   var done = Object.keys(log).filter(function (k) { return log[k].file === day; }).sort();
   var todo = todays.filter(function (k) { return done.indexOf(k) < 0; });
   var problem = '', lines = [];
-  if (todo.length) problem = '今天（' + md + '）還有 ' + todo.length + ' 個批次沒更新價格';
-  else if (!done.length) problem = '今天（' + md + '）還沒有任何批次更新價格';
+  if (todo.length) problem = '今天（' + md + '）第一批 ' + todo[0] + ' 還沒更新價格';
+  else if (!done.length) problem = '今天（' + md + '）第一批還沒更新價格';
   if (todo.length) lines.push('還沒更新：' + todo.join('、'));
   lines.push('已更新：' + (done.length ? done.map(function (k) { return k + '（' + String(log[k].at).slice(11) + '）'; }).join('、') : '無'));
   if (!todays.length) lines.push('（今天還沒有人用小幫手打開過出貨批次列表，所以不知道今天建了哪些批次）');
