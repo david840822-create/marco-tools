@@ -94,16 +94,19 @@
       if (!st || !st.ok) throw new Error('');
       var todays = bs.filter(function (b) { return b.no && batchDay(b) === st.today && !/已停止|已中斷/.test(b.status); });
       if (!todays.length) { note.remove(); return; } // 今天還沒建批次：不提示
+      // 只有每天第一批（有預訂單）需要更新價格，之後的批次不提醒
+      todays.sort(function (x, y) { return (x.date + x.time) < (y.date + y.time) ? -1 : 1; });
+      todays = todays.slice(0, 1);
       var todo = todays.filter(function (b) { var e = st.log && st.log[b.no]; return !e || e.file !== st.today; });
       if (!todo.length) {
         note.style.cssText = 'padding:6px 12px;font-size:13px;color:#1b5e20;background:#e8f5e9;border-top:1px solid #c8e6c9;';
-        note.textContent = '✓ 今天（' + mdLabel(st.today) + '）的 ' + todays.length + ' 個批次價格都更新了';
+        note.textContent = '✓ 今天（' + mdLabel(st.today) + '）第一批 ' + todays[0].no + ' 價格已更新';
         return;
       }
       var late = new Date().getHours() >= 17 || new Date().getHours() < 6;
       note.style.cssText = 'padding:8px 12px;font-size:13px;line-height:1.45;cursor:pointer;border-top:1px solid #eee;' +
         (late ? 'background:#c62828;color:#fff;font-weight:700;' : 'background:#fff8e1;color:#8a5a00;');
-      note.innerHTML = '⚠ 今天（' + mdLabel(st.today) + '）還有 ' + todo.length + ' 個批次<b>沒更新價格</b>：' + todo.map(function (b) { return b.no; }).join('、') +
+      note.innerHTML = '⚠ 今天（' + mdLabel(st.today) + '）第一批 ' + todo[0].no + ' <b>還沒更新價格</b>' +
         '<div style="font-weight:400;font-size:12px;margin-top:2px">' + (late ? '👉 點這裡馬上更新價格' : '價格檔約 17:00 產生，17:00 後記得更新（點這裡打開）') + '</div>';
       note.onclick = function () { var b = box.querySelector('.mk-menu-it[data-i="1"]'); if (b) b.click(); };
     } catch (e) {

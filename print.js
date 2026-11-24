@@ -170,6 +170,22 @@
     return !!n && NO_PRICE.some(function (x) { return x && n.indexOf(nameKey(x)) >= 0; });
   }
   /* 改出貨單版面：司機區、欄位、數字、備註欄、頁尾；預算制客戶拿掉價格 */
+  function num(s) { var n = Number(String(s || '').replace(/[^\d.\-]/g, '')); return isFinite(n) ? n : 0; }
+  /* 在出貨明細原頁面上標出「外購品」：後台的商品資料 serialNumber 是 CUSTOM_GOODS 開頭（自訂商品，不在商品目錄） */
+  function markExternal(sec) {
+    [].forEach.call(sec.querySelectorAll('tbody tr'), function (tr) {
+      var k = Object.keys(tr).find(function (x) { return x.indexOf('__reactFiber') === 0; });
+      var f = k && tr[k], idx = null, data = null;
+      for (var i = 0; i < 8 && f; i++) {
+        if (idx == null && f.key != null) { var m = /^goods_(\d+)$/.exec(String(f.key)); if (m) idx = +m[1]; }
+        var p = f.memoizedProps || {};
+        if (p.data && p.data.goods) { data = p.data; break; }
+        f = f.return;
+      }
+      var g = data && idx != null ? data.goods[idx] : null;
+      if (g && /^CUSTOM_GOODS/.test(String(g.serialNumber || ''))) tr.setAttribute('data-mk-ext', '1');
+    });
+  }
   function customize(sec, noPrice) {
     var doc = sec.ownerDocument;
     var table = sec.querySelector('table.product-table') || sec.querySelector('table');
@@ -228,7 +244,14 @@
       sec.appendChild(foot);
     }
     if (noPrice) {
-      [].forEach.call(table.querySelectorAll('th.col-price, th.col-amount, td.col-price, td.col-amount'), function (el) { el.textContent = ''; });
+      /* 預算制：不印價格；但「外購品」（客人私人另外代買、系統裡是自訂商品）保留單價和金額（0 的留白，等會計補價） */
+      var hasExt = !!table.querySelector('tbody tr[data-mk-ext]');
+      [].forEach.call(table.querySelectorAll('th.col-price, th.col-amount, td.col-price, td.col-amount'), function (el) {
+        var tr = el.closest('tr');
+        if (tr && tr.hasAttribute('data-mk-ext') && /^td$/i.test(el.tagName)) { if (!(num(el.textContent) > 0)) el.textContent = ''; return; }
+        if (hasExt && /^th$/i.test(el.tagName)) { el.textContent = el.classList.contains('col-price') ? '外購單價' : '外購金額'; return; }
+        el.textContent = '';
+      });
       sec.setAttribute('data-mk-noprice', '1');
     }
   }
@@ -408,6 +431,10 @@
   }
   function priceTodo(b) { // 今天的批次、還沒用今天的價格檔更新 → 回傳說明；否則 ''
     if (!upd || batchDay(b) !== upd.today || /已停止|已中斷/.test(b.status)) return '';
+    // 只有每天第一批（有預訂單）需要更新價格
+    var same = batches.filter(function (x) { return batchDay(x) === batchDay(b) && !/已停止|已中斷/.test(x.status); });
+    same.sort(function (x, y) { return (x.date + x.time) < (y.date + y.time) ? -1 : 1; });
+    if (!same.length || same[0].id !== b.id) return '';
     var e = upd.log && upd.log[b.no];
     if (!e) return '還沒更新價格';
     if (e.file !== batchDay(b)) return '用了 ' + mdLabel(e.file) + ' 的價格檔';
@@ -513,6 +540,7 @@
       if (!o) return;
       if (o.name && sec.innerText.indexOf(o.name) < 0) res.warns.push('對應可能有誤：' + o.name + '（' + o.orderNo + '）');
       o.noPrice = isNoPrice(o.name);
+      if (o.noPrice) markExternal(sec);
       var c = sec.cloneNode(true);
       try { customize(c, o.noPrice); } catch (e) { res.warns.push('版面調整失敗（' + o.name + '）：' + e.message); c = sec; }
       res.secs.push({ html: c.outerHTML, o: o, k: carKey(o.car) });

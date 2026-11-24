@@ -230,7 +230,7 @@
     book.put(pp, px);
 
     /* 2) 訂單資料 N 欄：保留公式，寫入算好的值（跟 Excel 存檔後一樣） */
-    var res = { total: 0, changed: 0, exclusive: 0, notFound: [], zero: [], same: 0, expected: {} };
+    var res = { total: 0, changed: 0, changes: [], exclusive: 0, notFound: [], zero: [], same: 0, expected: {} };
     var byRow = {};
     orders.rows.forEach(function (row) {
       if (!row.B && !row.A) return;
@@ -242,7 +242,8 @@
       else if (e.kind === 'ok') {
         var want = round2(e.value); // 後台價格只存到小數 2 位（158.3333 → 158.33）
         res.expected[String(row.B)] = want;
-        if (Math.abs(Number(row.M) - want) < 0.001) res.same++; else res.changed++;
+        if (Math.abs(Number(row.M) - want) < 0.001) res.same++;
+        else { res.changed++; res.changes.push(label + '：' + row.M + ' → ' + want); }
       }
       else if (e.kind === 'zero') res.zero.push(label);
       else res.notFound.push(label + (e.kind === 'noTier' ? ' [客戶標籤 ' + row.E + ' 沒有對應價格欄]' : ''));
@@ -407,6 +408,13 @@
     if (b.time && +b.time.slice(0, 2) < 6) d.setDate(d.getDate() - 1);
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
+  /* 每天第一批（作業日最早建立、沒停止的批次）：有預訂單，價格要更新；之後的批次不提醒 */
+  function isFirstOfDay(b) {
+    var day = batchDay(b);
+    var same = batches.filter(function (x) { return batchDay(x) === day && !/已停止|已中斷/.test(x.status); });
+    same.sort(function (x, y) { return (x.date + x.time) < (y.date + y.time) ? -1 : 1; });
+    return same.length && same[0].id === b.id;
+  }
   function updState(b) { // {done, e, wrong}
     var e = upd && upd.log && upd.log[b.no];
     if (!e) return { done: false };
@@ -417,6 +425,8 @@
     var s = updState(b), day = batchDay(b);
     if (s.done) return '<span style="color:#1b5e20;font-size:12px">✓ 已更新價格 ' + esc(String(s.e.at).slice(11)) + '</span>';
     if (day !== upd.today || /已停止|已中斷/.test(b.status)) return '';
+    if (!isFirstOfDay(b)) return ''; // 只有每天第一批（有預訂單）需要更新價格
+
     if (s.wrong) return '<span style="color:#b71c1c;font-size:12px;font-weight:700">⚠ 用了 ' + esc(mdLabel(s.e.file)) + ' 的價格檔</span>';
     return '<span style="color:#b71c1c;font-size:12px;font-weight:700">⚠ 還沒更新價格</span>';
   }
@@ -517,6 +527,22 @@
           var res = fillBook(book, orders, price, ix);
           rep.res = res;
           if (res.missingN) rep.warn.push('有 ' + res.missingN + ' 列沒有「價格」欄，請通知維護者');
+          if (!res.changed) { // 價格本來就都一樣：不用匯入，但記成「已更新」
+            rep.nothing = true;
+            await logUpd(b, price.date, res.notFound.length + res.zero.length);
+            continue;
+          }
+          /* 看起來已經更新過（大部分本來就一樣、只有少數不同）：那幾個很可能是手動改過的價格，先列出來確認再蓋掉 */
+          if (res.same >= 9 * res.changed) {
+            var ask = '批次 ' + b.no + ' 看起來已經更新過價格（' + res.same + ' 項本來就一樣），\n但下面 ' + res.changed + ' 項跟價格檔不同，可能是「手動改過的價格」：\n\n' +
+              res.changes.slice(0, 15).join('\n') + (res.changes.length > 15 ? '\n…還有 ' + (res.changes.length - 15) + ' 項' : '') +
+              '\n\n按「確定」＝改回價格檔的價格；按「取消」＝這個批次不動。';
+            if (!confirm(ask)) {
+              rep.kept = true; rep.warn.push('沒有匯入（保留目前後台的價格）');
+              await logUpd(b, price.date, res.changed); // 已經更新過，只是保留手動價格
+              continue;
+            }
+          }
           var out = await zip(book.files);
           status(head + '\n批次 ' + b.no + '：匯入中…');
           var imp = await importFile(out, '訂單金額數量-' + b.no + '-自動更新價格.xlsx');
@@ -555,10 +581,11 @@
   function render(rep) {
     var r = rep.res;
     var anomaly = rep.warn.length || (r && (r.notFound.length || r.zero.length));
-    var html = '<b>批次 ' + esc(rep.b.no) + '</b>' + (anomaly ? '　⚠ 有異常' : '　✓ 完成，價格一致');
+    var html = '<b>批次 ' + esc(rep.b.no) + '</b>' + (rep.nothing ? '　✓ 價格本來就跟價格檔一樣，沒有匯入' : anomaly ? '　⚠ 有異常' : '　✓ 完成，價格一致');
     if (r) html += '<div style="color:#333">共 ' + r.total + ' 個品項：價格有變 ' + r.changed + '、本來就一樣 ' + r.same + '、專屬價不改 ' + r.exclusive + '</div>';
     html += rep.warn.map(function (w) { return '<div>⚠ ' + esc(w) + '</div>'; }).join('');
     if (r) {
+      html += list(rep.kept ? '跟價格檔不同的品項（保留原價，沒改）' : '價格有改的品項（原本 → 現在）', r.changes);
       html += list('價格檔裡沒有這個商品、或價格空白（後台維持原價，請手動確認）', r.notFound);
       html += list('價格檔填 0 的商品（沒有改成 0，後台維持原價，請手動確認）', r.zero);
     }
