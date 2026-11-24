@@ -78,7 +78,7 @@
       var t = txt(tr);
       var no = (/\b(\d{8})\b/.exec(t) || [])[1] || '';
       var dt = (/(\d{4}\/\d{2}\/\d{2})\s+(\d{2}:\d{2})/.exec(t) || []);
-      var status = (/(進行中|已結束|已停止|[^\s]*完成)/.exec(t) || [])[1] || '';
+      var status = (/(進行中|已結束|已停止|已中斷|[^\s]*完成)/.exec(t) || [])[1] || '';
       list.push({ id: m[1], no: no, date: dt[1] || '', time: dt[2] || '', status: status });
     });
     return list;
@@ -370,7 +370,7 @@
         html += '<div style="margin-top:8px;display:flex;justify-content:space-between"><b style="color:#2e7d4f">' + esc(b.date) + ' 建立</b><a href="#" class="mk-pday" data-date="' + esc(b.date) + '" style="font-size:12px;color:#2e7d4f">整天全選</a></div>';
         lastDate = b.date;
       }
-      html += '<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="mk-pb" value="' + esc(b.id) + '" data-no="' + esc(b.no) + '" data-date="' + esc(b.date) + '"> ' + esc(b.no) + '　<span style="color:#888">' + esc(b.time) + ' ' + esc(b.status) + '</span></label>';
+      html += '<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="mk-pb" value="' + esc(b.id) + '" data-no="' + esc(b.no) + '" data-date="' + esc(b.date) + '"> ' + esc(b.no) + '　<span style="color:#888">' + esc(b.time) + ' ' + esc(b.status) + '</span> <span class="mk-pst" data-id="' + esc(b.id) + '">' + updTag(b) + '</span></label>';
     });
     html += '<button id="mk-pgo" style="margin-top:10px;width:100%;padding:10px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">更新價格</button>';
     html += '<div style="margin-top:6px;text-align:right"><a href="#" id="mk-pchkey" style="font-size:12px;color:#888">更換價格密碼</a></div>';
@@ -387,6 +387,7 @@
     panel.querySelector('#mk-pgo').onclick = run;
     panel.querySelector('#mk-pfile').onchange = showFileWarn;
     loadFileList();
+    loadUpd();
   }
 
   /* ---------- 價格檔下拉選單 ---------- */
@@ -396,6 +397,47 @@
     var r = await fetch(PRICE_API + '?key=' + encodeURIComponent(getKey()) + params, { redirect: 'follow' });
     return r.json();
   }
+  /* ---------- 更新紀錄：哪些批次今天已經用今天的價格檔更新過（三台電腦共用） ---------- */
+  var upd = null; // {today, now, log:{批次編號:{at,file,warn}}}
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function batchDay(b) { // 批次建立的作業日 yyyy-MM-dd（凌晨 0～6 點建的算前一天）
+    var m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(b.date || '');
+    if (!m) return '';
+    var d = new Date(+m[1], +m[2] - 1, +m[3]);
+    if (b.time && +b.time.slice(0, 2) < 6) d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function updState(b) { // {done, e, wrong}
+    var e = upd && upd.log && upd.log[b.no];
+    if (!e) return { done: false };
+    return { done: e.file === batchDay(b), e: e, wrong: e.file !== batchDay(b) };
+  }
+  function updTag(b) {
+    if (!upd) return '';
+    var s = updState(b), day = batchDay(b);
+    if (s.done) return '<span style="color:#1b5e20;font-size:12px">✓ 已更新價格 ' + esc(String(s.e.at).slice(11)) + '</span>';
+    if (day !== upd.today || /已停止|已中斷/.test(b.status)) return '';
+    if (s.wrong) return '<span style="color:#b71c1c;font-size:12px;font-weight:700">⚠ 用了 ' + esc(mdLabel(s.e.file)) + ' 的價格檔</span>';
+    return '<span style="color:#b71c1c;font-size:12px;font-weight:700">⚠ 還沒更新價格</span>';
+  }
+  async function loadUpd() {
+    try {
+      var r = await fetch(PRICE_API + '?action=status', { redirect: 'follow' });
+      var j = await r.json();
+      if (j && j.ok) upd = j;
+    } catch (e) { upd = null; }
+    batches.forEach(function (b) {
+      var el = panel.querySelector('.mk-pst[data-id="' + b.id + '"]');
+      if (el) el.innerHTML = updTag(b);
+    });
+  }
+  async function logUpd(b, fileDate, warn) {
+    try {
+      var r = await api('&action=log&batch=' + encodeURIComponent(b.no) + '&file=' + encodeURIComponent(fileDate) + '&warn=' + (warn || 0));
+      return !!(r && r.ok);
+    } catch (e) { return false; }
+  }
+
   async function loadFileList() {
     var sel = panel.querySelector('#mk-pfile');
     try {
@@ -435,8 +477,14 @@
 
   async function run() {
     var btn = this;
-    var picked = [].slice.call(panel.querySelectorAll('.mk-pb:checked')).map(function (c) { return { id: c.value, no: c.getAttribute('data-no') }; });
+    var picked = [].slice.call(panel.querySelectorAll('.mk-pb:checked')).map(function (c) {
+      return batches.filter(function (b) { return b.id === c.value; })[0] || { id: c.value, no: c.getAttribute('data-no') };
+    });
     if (!picked.length) { status('請先勾選批次'); return; }
+    /* 今天已經更新過的批次：再更新會把手動改過的價格蓋掉，先確認 */
+    var again = picked.filter(function (b) { return updState(b).done; });
+    if (again.length && !confirm('下面的批次已經更新過價格：\n' + again.map(function (b) { return b.no + '（' + String(updState(b).e.at).slice(11) + ' 更新）'; }).join('\n') +
+      '\n\n再更新一次，會把「手動改過的價格」蓋回價格檔的價格。\n確定要再更新一次嗎？')) { status('已取消'); return; }
     btn.disabled = true; btn.style.opacity = .6;
     resultEl.innerHTML = '';
     var T0 = Date.now();
@@ -483,10 +531,15 @@
           });
           rep.bad = bad;
           if (bad.length) rep.warn.push('匯入後有 ' + bad.length + ' 個品項價格跟價格檔不一致');
+          /* 記錄「這個批次已更新」（給每天的提醒用） */
+          if (!/失敗|錯誤|error|fail/i.test(imp.msg)) {
+            if (!(await logUpd(b, price.date, bad.length + res.notFound.length + res.zero.length))) rep.warn.push('更新紀錄沒存到（價格已更新，但提醒可能會顯示「還沒更新」）');
+          }
         } catch (e) { rep.warn.push('發生錯誤：' + e.message); }
       }
       status(head + '\n完成，用時 ' + Math.round((Date.now() - T0) / 1000) + ' 秒');
       resultEl.innerHTML = reports.map(render).join('');
+      loadUpd();
     } catch (e) {
       status(''); resultEl.innerHTML = box('#b71c1c', '⚠ 發生錯誤：' + esc(e.message));
     } finally { btn.disabled = false; btn.style.opacity = 1; }
@@ -504,8 +557,8 @@
     if (r) html += '<div style="color:#333">共 ' + r.total + ' 個品項：價格有變 ' + r.changed + '、本來就一樣 ' + r.same + '、專屬價不改 ' + r.exclusive + '</div>';
     html += rep.warn.map(function (w) { return '<div>⚠ ' + esc(w) + '</div>'; }).join('');
     if (r) {
-      html += list('價格檔找不到的商品（沒改，請手動確認）', r.notFound);
-      html += list('價格檔是 0 的商品（沒改，請手動確認）', r.zero);
+      html += list('價格檔裡沒有這個商品、或價格空白（後台維持原價，請手動確認）', r.notFound);
+      html += list('價格檔填 0 的商品（沒有改成 0，後台維持原價，請手動確認）', r.zero);
     }
     html += list('匯入後價格不一致', rep.bad);
     if (rep.importMsg) html += '<div style="color:#666;margin-top:4px">後台訊息：' + esc(rep.importMsg) + '</div>';

@@ -36,6 +36,77 @@
     '<div id="mk-menu-msg" style="padding:6px 12px;color:#b71c1c;font-size:12px;"></div>';
   document.body.appendChild(box);
   document.getElementById('mk-menu-x').onclick = function () { box.remove(); };
+
+  /* ---------- 每天提醒：今天的出貨批次有沒有更新價格（紀錄由「更新批次價格」寫入，三台電腦共用） ---------- */
+  var PRICE_API = 'https://script.google.com/macros/s/AKfycbwkph6A7dMEcndMv1WhczRhX0O0EIbZ3XPCgC4DUuAjybAHYP9zRkVJ9c_BN6jWUexW/exec';
+  var note = document.createElement('div');
+  note.id = 'mk-menu-price';
+  note.style.cssText = 'padding:6px 12px;font-size:12px;color:#888;border-top:1px solid #eee;';
+  note.textContent = '檢查今天的批次價格有沒有更新…';
+  box.insertBefore(note, box.children[1]);
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function mdLabel(d) { var p = String(d).split('-'); return p.length === 3 ? (+p[1]) + '/' + (+p[2]) : d; }
+  function batchDay(b) { // 批次建立的作業日（凌晨 0～6 點建的算前一天）
+    var m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(b.date || '');
+    if (!m) return '';
+    var d = new Date(+m[1], +m[2] - 1, +m[3]);
+    if (b.time && +b.time.slice(0, 2) < 6) d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function readBatchList(doc) {
+    var seen = {}, list = [];
+    doc.querySelectorAll('a[href*="/delivery-batch/edit/"]').forEach(function (a) {
+      var m = /\/delivery-batch\/edit\/(\d+)$/.exec(a.getAttribute('href') || '');
+      var tr = a.closest('tr');
+      if (!m || !tr || seen[m[1]]) return;
+      seen[m[1]] = 1;
+      var t = (tr.innerText || '').replace(/\s+/g, ' ');
+      var dt = /(\d{4}\/\d{2}\/\d{2})\s+(\d{2}:\d{2})/.exec(t) || [];
+      list.push({ no: (/\b(\d{8})\b/.exec(t) || [])[1] || '', date: dt[1] || '', time: dt[2] || '', status: (/(進行中|已結束|已停止|已中斷|[^\s]*完成)/.exec(t) || [])[1] || '' });
+    });
+    return list;
+  }
+  function batchesFromListPage() { // 在隱藏視窗打開出貨批次列表，等清單穩定再讀
+    return new Promise(function (resolve) {
+      var f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;left:-12000px;top:0;width:1400px;height:1000px;visibility:hidden;';
+      f.src = location.origin + '/delivery-batch/list';
+      document.body.appendChild(f);
+      var last = -1, same = 0, t0 = Date.now();
+      var iv = setInterval(function () {
+        var l = [];
+        try { l = readBatchList(f.contentDocument); } catch (e) {}
+        if (l.length && l.length === last) same++; else same = 0;
+        last = l.length;
+        if (same >= 3 || Date.now() - t0 > 30000) { clearInterval(iv); f.remove(); resolve(l); }
+      }, 300);
+    });
+  }
+  (async function () {
+    try {
+      var bs = readBatchList(document);
+      var pst = fetch(PRICE_API + '?action=status', { redirect: 'follow' }).then(function (r) { return r.json(); });
+      if (!bs.length) bs = await batchesFromListPage();
+      var st = await pst;
+      if (!st || !st.ok) throw new Error('');
+      var todays = bs.filter(function (b) { return b.no && batchDay(b) === st.today && !/已停止|已中斷/.test(b.status); });
+      if (!todays.length) { note.remove(); return; } // 今天還沒建批次：不提示
+      var todo = todays.filter(function (b) { var e = st.log && st.log[b.no]; return !e || e.file !== st.today; });
+      if (!todo.length) {
+        note.style.cssText = 'padding:6px 12px;font-size:13px;color:#1b5e20;background:#e8f5e9;border-top:1px solid #c8e6c9;';
+        note.textContent = '✓ 今天（' + mdLabel(st.today) + '）的 ' + todays.length + ' 個批次價格都更新了';
+        return;
+      }
+      var late = new Date().getHours() >= 17 || new Date().getHours() < 6;
+      note.style.cssText = 'padding:8px 12px;font-size:13px;line-height:1.45;cursor:pointer;border-top:1px solid #eee;' +
+        (late ? 'background:#c62828;color:#fff;font-weight:700;' : 'background:#fff8e1;color:#8a5a00;');
+      note.innerHTML = '⚠ 今天（' + mdLabel(st.today) + '）還有 ' + todo.length + ' 個批次<b>沒更新價格</b>：' + todo.map(function (b) { return b.no; }).join('、') +
+        '<div style="font-weight:400;font-size:12px;margin-top:2px">' + (late ? '👉 點這裡馬上更新價格' : '價格檔約 17:00 產生，17:00 後記得更新（點這裡打開）') + '</div>';
+      note.onclick = function () { var b = box.querySelector('.mk-menu-it[data-i="1"]'); if (b) b.click(); };
+    } catch (e) {
+      note.textContent = '（讀不到價格更新紀錄）';
+    }
+  })();
   [].forEach.call(box.querySelectorAll('.mk-menu-it'), function (b) {
     b.onmouseenter = function () { b.style.background = '#f1f8f3'; };
     b.onmouseleave = function () { b.style.background = '#fff'; };

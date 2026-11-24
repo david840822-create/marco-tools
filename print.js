@@ -340,7 +340,7 @@
       var t = txt(tr);
       var no = (/\b(\d{8})\b/.exec(t) || [])[1] || '';
       var dt = (/(\d{4}\/\d{2}\/\d{2})\s+(\d{2}:\d{2})/.exec(t) || []);
-      var status = (/(進行中|已結束|已停止|[^\s]*完成)/.exec(t) || [])[1] || '';
+      var status = (/(進行中|已結束|已停止|已中斷|[^\s]*完成)/.exec(t) || [])[1] || '';
       list.push({ id: m[1], no: no, date: dt[1] || '', time: dt[2] || '', status: status });
     });
     return list;
@@ -376,8 +376,9 @@
       html += '<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center"><b style="color:#2e7d4f">' + esc(b.date) + ' 建立</b><a href="#" class="mk-day" data-date="' + esc(b.date) + '" style="font-size:12px;color:#2e7d4f">整天全選</a></div>';
       lastDate = b.date;
     }
-    html += '<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="mk-b" value="' + esc(b.id) + '" data-no="' + esc(b.no) + '" data-date="' + esc(b.date) + '"> ' + esc(b.no) + '　<span style="color:#888">' + esc(b.time) + ' ' + esc(b.status) + '</span></label>';
+    html += '<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="mk-b" value="' + esc(b.id) + '" data-no="' + esc(b.no) + '" data-date="' + esc(b.date) + '"> ' + esc(b.no) + '　<span style="color:#888">' + esc(b.time) + ' ' + esc(b.status) + '</span> <span class="mk-pst" data-id="' + esc(b.id) + '"></span></label>';
   });
+  html += '<div id="mk-pricewarn"></div>';
   html += '<label style="display:block;margin-top:8px;font-size:13px"><input type="checkbox" id="mk-autoalloc" checked> 先自動分配還沒分配的車次（1車→A … 6車→F）</label>';
   html += '<label style="display:block;font-size:13px"><input type="checkbox" id="mk-skipcancel" checked> 排除「已取消」訂單</label>';
   html += '<button id="mk-go" style="margin-top:10px;width:100%;padding:10px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">產生出貨單（依車號排序）</button>';
@@ -389,8 +390,50 @@
       var allOn = boxes.every(function (c) { return c.checked; });
       boxes.forEach(function (c) { c.checked = !allOn; });
       a.textContent = allOn ? '整天全選' : '取消整天';
+      resetPriceGate();
     };
   });
+
+  /* ---------- 價格更新提醒：今天的批次還沒用「更新批次價格」更新過，列印前先警示 ---------- */
+  var PRICE_API = 'https://script.google.com/macros/s/AKfycbwkph6A7dMEcndMv1WhczRhX0O0EIbZ3XPCgC4DUuAjybAHYP9zRkVJ9c_BN6jWUexW/exec';
+  var upd = null, priceGateOpen = false;
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function mdLabel(d) { var p = String(d).split('-'); return p.length === 3 ? (+p[1]) + '/' + (+p[2]) : d; }
+  function batchDay(b) { // 批次建立的作業日 yyyy-MM-dd（凌晨 0～6 點建的算前一天）
+    var m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(b.date || '');
+    if (!m) return '';
+    var d = new Date(+m[1], +m[2] - 1, +m[3]);
+    if (b.time && +b.time.slice(0, 2) < 6) d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function priceTodo(b) { // 今天的批次、還沒用今天的價格檔更新 → 回傳說明；否則 ''
+    if (!upd || batchDay(b) !== upd.today || /已停止|已中斷/.test(b.status)) return '';
+    var e = upd.log && upd.log[b.no];
+    if (!e) return '還沒更新價格';
+    if (e.file !== batchDay(b)) return '用了 ' + mdLabel(e.file) + ' 的價格檔';
+    return '';
+  }
+  function resetPriceGate() {
+    priceGateOpen = false;
+    var w = panel.querySelector('#mk-pricewarn'), g = panel.querySelector('#mk-go');
+    if (w) w.innerHTML = '';
+    if (g) { g.textContent = '產生出貨單（依車號排序）'; g.style.background = '#2e7d4f'; }
+  }
+  [].forEach.call(panel.querySelectorAll('.mk-b'), function (c) { c.addEventListener('change', resetPriceGate); });
+  (async function () {
+    try {
+      var r = await fetch(PRICE_API + '?action=status', { redirect: 'follow' });
+      var j = await r.json();
+      if (j && j.ok) upd = j;
+    } catch (e) { upd = null; }
+    batches.forEach(function (b) {
+      var el = panel.querySelector('.mk-pst[data-id="' + b.id + '"]');
+      if (!el || !upd) return;
+      var t = priceTodo(b), e = upd.log && upd.log[b.no];
+      if (t) el.innerHTML = '<span style="color:#b71c1c;font-size:12px;font-weight:700">⚠ ' + esc(t) + '</span>';
+      else if (e && e.file === batchDay(b)) el.innerHTML = '<span style="color:#1b5e20;font-size:12px">✓ 已更新價格</span>';
+    });
+  })();
 
   /* ---------- 讀一個批次：訂單 ID、客戶、車次、車次分配進度 ---------- */
   async function readBatch(b, skipCancel) {
@@ -479,6 +522,24 @@
   panel.querySelector('#mk-go').onclick = async function () {
     var picked = [].slice.call(panel.querySelectorAll('.mk-b:checked')).map(function (c) { return { id: c.value, no: c.getAttribute('data-no') }; });
     if (!picked.length) { status('請先勾選要列印的批次'); return; }
+    /* 今天的批次還沒更新價格：第一次按先警示（不用跳視窗，避免新分頁被擋），再按一次才列印 */
+    if (!priceGateOpen) {
+      var todo = picked.map(function (p) {
+        var b = batches.filter(function (x) { return x.id === p.id; })[0];
+        var t = b ? priceTodo(b) : '';
+        return t ? p.no + '：' + t : '';
+      }).filter(Boolean);
+      if (todo.length) {
+        priceGateOpen = true;
+        panel.querySelector('#mk-pricewarn').innerHTML = '<div style="margin-top:8px;background:#fdecea;border:2px solid #c62828;color:#b71c1c;border-radius:6px;padding:8px;font-size:14px">' +
+          '<b>⚠ 價格還沒更新！</b><br>' + todo.map(esc).join('<br>') +
+          '<div style="margin-top:4px;font-size:13px;color:#333">請先回選單按「💲 更新批次價格」。<br>確定不用更新，再按一次下面的紅色按鈕才會列印。</div></div>';
+        this.textContent = '仍要列印（價格還沒更新）';
+        this.style.background = '#c62828';
+        status('');
+        return;
+      }
+    }
     var opts = { skipCancel: panel.querySelector('#mk-skipcancel').checked, autoAlloc: panel.querySelector('#mk-autoalloc').checked };
     this.disabled = true; this.style.opacity = .6;
     var T0 = Date.now();
