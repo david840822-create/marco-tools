@@ -85,9 +85,10 @@
   (async function () {
     try {
       var bs = readBatchList(document);
-      var pst = fetch(PRICE_API + '?action=status', { redirect: 'follow' }).then(function (r) { return r.json(); });
       if (!bs.length) bs = await batchesFromListPage();
-      var st = await pst;
+      var seen = [], stop = []; // 順便回報看到的批次（給每天定時寄信提醒用）
+      bs.forEach(function (b) { if (/^\d{8}$/.test(b.no)) (/已停止|已中斷/.test(b.status) ? stop : seen).push(b.no); });
+      var st = await fetch(PRICE_API + '?action=status&seen=' + seen.slice(0, 30).join(',') + '&stop=' + stop.slice(0, 30).join(','), { redirect: 'follow' }).then(function (r) { return r.json(); });
       if (!st || !st.ok) throw new Error('');
       var todays = bs.filter(function (b) { return b.no && batchDay(b) === st.today && !/已停止|已中斷/.test(b.status); });
       if (!todays.length) { note.remove(); return; } // 今天還沒建批次：不提示

@@ -422,7 +422,9 @@
   [].forEach.call(panel.querySelectorAll('.mk-b'), function (c) { c.addEventListener('change', resetPriceGate); });
   (async function () {
     try {
-      var r = await fetch(PRICE_API + '?action=status', { redirect: 'follow' });
+      var seen = [], stop = []; // 順便回報看到的批次（給每天定時寄信提醒用）
+      batches.forEach(function (b) { if (/^\d{8}$/.test(b.no)) (/已停止|已中斷/.test(b.status) ? stop : seen).push(b.no); });
+      var r = await fetch(PRICE_API + '?action=status&seen=' + seen.slice(0, 30).join(',') + '&stop=' + stop.slice(0, 30).join(','), { redirect: 'follow' });
       var j = await r.json();
       if (j && j.ok) upd = j;
     } catch (e) { upd = null; }
