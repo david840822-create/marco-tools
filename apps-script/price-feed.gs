@@ -6,6 +6,8 @@
  *   ?action=status[&seen=批次,批次&stop=批次] → {ok, today, now, log:{批次編號:{at, file, warn}}}
  *       （各批次哪時用哪天的價格檔更新過；不用密碼。seen/stop＝小幫手看到的今天批次／已停止批次，給定時寄信提醒用）
  *   ?action=log&batch=批次編號&file=價格檔日期&warn=異常數 → {ok}（更新批次價格成功後記一筆）
+ *   ?action=picking&days=3 → {ok, files:[檔名], rows:[[訂單商品ID, 客戶, 品名, 原數量, 單位, 秤重公斤, 轉化公斤數, 是否轉化, 回填數量]]}
+ *       （最近幾天理貨表格「匯入馬可系統」分頁，給會計早上核對用）
  *   ?action=list → {ok, today:'yyyy-MM-dd'（作業日：凌晨 0～6 點算前一天）, files:[{id, name, date:'yyyy-MM-dd'}]}（最新在前，最多 15 個）
  *   ?id=檔案ID   → {ok, name, date, header:[A..L 標題], rows:[[A..L], ...]}（只接受報價資料夾裡的價格檔）
  *   失敗 → {ok:false, error, badKey?}
@@ -32,6 +34,7 @@ function priceFeed_(p) {
   if (!key) return { ok: false, error: '還沒設定密碼（專案設定 → 指令碼屬性 PRICE_KEY）' };
   if (String(p.key || '') !== key) return { ok: false, badKey: true, error: '密碼不對' };
   if (p.action === 'log') return logUpdate_(p);
+  if (p.action === 'picking') return pickingRows_(Number(p.days) || 3);
   if (p.action === 'list') return listPriceFiles_();
   if (p.id) return loadPriceFile_(p.id);
   return loadTodayPrices_();
@@ -79,6 +82,43 @@ function logUpdate_(p) {
     PropertiesService.getScriptProperties().setProperty(UPDATE_LOG_PROP, JSON.stringify(log));
   } finally { lock.releaseLock(); }
   return { ok: true };
+}
+
+/* ===== 理貨表格的回填資料（給「會計早上核對」比對重量用） =====
+ * 找最近 days 天改過的「…理貨表格…」試算表，讀「匯入馬可系統」分頁：
+ * 回傳 rows：[訂單商品ID, 客戶簡稱, 商品名稱, 原數量, 單位, 秤重情況(公斤), 轉化公斤數, 是否轉化訂購量, 回填數量]
+ * 回填數量空白＝不改（照原數量）。 */
+var PICKING_SHEET = '匯入馬可系統';
+function pickingRows_(days) {
+  days = Math.min(Math.max(days, 1), 10);
+  var since = new Date(Date.now() - days * 86400000).toISOString();
+  var token = ScriptApp.getOAuthToken(), auth = { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true };
+  /* 理貨表格在共用雲端硬碟，DriveApp 只搜得到自己開過的檔，所以直接用 Drive API 搜全部雲端硬碟 */
+  var q = "name contains '理貨表格' and mimeType = 'application/vnd.google-apps.spreadsheet' and modifiedTime > '" + since + "' and trashed = false";
+  var files = [], pageToken = '';
+  do {
+    var lr = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files?corpora=allDrives&includeItemsFromAllDrives=true&supportsAllDrives=true&pageSize=100&fields=nextPageToken,files(id,name)&q=' +
+      encodeURIComponent(q) + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''), auth);
+    if (lr.getResponseCode() !== 200) throw new Error('搜尋理貨表格失敗：' + lr.getContentText().slice(0, 200));
+    var lj = JSON.parse(lr.getContentText());
+    (lj.files || []).forEach(function (f) { if (!/\{/.test(f.name)) files.push(f); });
+    pageToken = lj.nextPageToken || '';
+  } while (pageToken && files.length < 200);
+  var rows = [], used = [];
+  files.forEach(function (f) {
+    var url = 'https://docs.google.com/spreadsheets/d/' + f.id + '/gviz/tq?tqx=out:csv&headers=1&sheet=' + encodeURIComponent(PICKING_SHEET);
+    var res = UrlFetchApp.fetch(url, auth);
+    if (res.getResponseCode() !== 200) return;
+    var csv = Utilities.parseCsv(res.getContentText());
+    if (!csv.length || String(csv[0][0]).indexOf('訂單商品ID') < 0) return; // 不是理貨表格（沒有這個分頁）
+    used.push(f.name);
+    for (var i = 1; i < csv.length; i++) {
+      var r = csv[i];
+      if (!/^\d+$/.test(String(r[0]).trim())) continue;
+      rows.push([String(r[0]).trim(), r[2], r[6], r[7], r[8], r[9], r[10], r[11], r[13]]);
+    }
+  });
+  return { ok: true, files: used, rows: rows };
 }
 
 /* ===== 今天有哪些批次（小幫手讀出貨批次列表時順便回報，給定時寄信提醒用） =====
@@ -280,4 +320,6 @@ function testPriceFeed() {
   var r = loadPriceFile_(l.files[0].id);
   console.log(r.ok ? ('OK ' + r.name + '（' + r.date + '）：' + r.rows.length + ' 列；標題 ' + r.header.join(',')) : ('失敗：' + r.error));
   console.log('更新紀錄：' + JSON.stringify(readUpdateLog_()));
+  var pk = pickingRows_(2);
+  console.log('理貨表格：' + pk.files.join('、') + '；共 ' + pk.rows.length + ' 列；第一列 ' + JSON.stringify(pk.rows[0]));
 }
