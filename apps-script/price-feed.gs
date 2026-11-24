@@ -2,7 +2,9 @@
  * 加在 Apps Script 專案「每日報價自動備份」裡（和 archiveDailyQuote 同一個專案，共用
  * ARCHIVE_ROOT_FOLDER_ID、TIME_ZONE 這兩個常數）。
  *
- * 網址（都要帶 key=密碼）：
+ * 網址（除了 status，都要帶 key=密碼）：
+ *   ?action=status → {ok, today, now, log:{批次編號:{at, file, warn}}}（各批次哪時用哪天的價格檔更新過；不用密碼）
+ *   ?action=log&batch=批次編號&file=價格檔日期&warn=異常數 → {ok}（更新批次價格成功後記一筆）
  *   ?action=list → {ok, today:'yyyy-MM-dd'（作業日：凌晨 0～6 點算前一天）, files:[{id, name, date:'yyyy-MM-dd'}]}（最新在前，最多 15 個）
  *   ?id=檔案ID   → {ok, name, date, header:[A..L 標題], rows:[[A..L], ...]}（只接受報價資料夾裡的價格檔）
  *   失敗 → {ok:false, error, badKey?}
@@ -23,9 +25,12 @@ function doGet(e) {
 }
 
 function priceFeed_(p) {
+  /* 更新紀錄（只有批次編號和時間，不含價格）：不用密碼，讓每台電腦都能提醒 */
+  if (p.action === 'status') return updateStatus_();
   var key = PropertiesService.getScriptProperties().getProperty('PRICE_KEY');
   if (!key) return { ok: false, error: '還沒設定密碼（專案設定 → 指令碼屬性 PRICE_KEY）' };
   if (String(p.key || '') !== key) return { ok: false, badKey: true, error: '密碼不對' };
+  if (p.action === 'log') return logUpdate_(p);
   if (p.action === 'list') return listPriceFiles_();
   if (p.id) return loadPriceFile_(p.id);
   return loadTodayPrices_();
@@ -42,6 +47,38 @@ function workDay_() {
 }
 
 function pad2_(n) { return (n < 10 ? '0' : '') + n; }
+
+/* ===== 批次價格更新紀錄（給「每天提醒有沒有更新價格」用） =====
+ * 存在指令碼屬性 PRICE_UPDATE_LOG：{ 批次編號: {at:'yyyy-MM-dd HH:mm', file:'價格檔日期 yyyy-MM-dd', warn:異常數} }
+ * 只留最近 10 天。 */
+var UPDATE_LOG_PROP = 'PRICE_UPDATE_LOG';
+function readUpdateLog_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(UPDATE_LOG_PROP) || '{}'); }
+  catch (e) { return {}; }
+}
+function updateStatus_() {
+  return {
+    ok: true,
+    today: Utilities.formatDate(workDay_(), TIME_ZONE, 'yyyy-MM-dd'),
+    now: Utilities.formatDate(new Date(), TIME_ZONE, 'yyyy-MM-dd HH:mm'),
+    log: readUpdateLog_()
+  };
+}
+function logUpdate_(p) {
+  var batch = String(p.batch || '').trim(), file = String(p.file || '').trim();
+  if (!/^\d{8}$/.test(batch)) return { ok: false, error: '批次編號不對' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(file)) return { ok: false, error: '價格檔日期不對' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var log = readUpdateLog_(), now = new Date();
+    log[batch] = { at: Utilities.formatDate(now, TIME_ZONE, 'yyyy-MM-dd HH:mm'), file: file, warn: Number(p.warn) || 0 };
+    var cutoff = Utilities.formatDate(new Date(now.getTime() - 10 * 86400000), TIME_ZONE, 'yyyy-MM-dd');
+    Object.keys(log).forEach(function (k) { if (!log[k] || String(log[k].at) < cutoff) delete log[k]; });
+    PropertiesService.getScriptProperties().setProperty(UPDATE_LOG_PROP, JSON.stringify(log));
+  } finally { lock.releaseLock(); }
+  return { ok: true };
+}
 
 /* 價格檔名的日期（Mdd）＋ 月資料夾的年份 → yyyy-MM-dd */
 function fileDate_(folderName, fileName) {
@@ -174,4 +211,5 @@ function testPriceFeed() {
   if (!l.files.length) return;
   var r = loadPriceFile_(l.files[0].id);
   console.log(r.ok ? ('OK ' + r.name + '（' + r.date + '）：' + r.rows.length + ' 列；標題 ' + r.header.join(',')) : ('失敗：' + r.error));
+  console.log('更新紀錄：' + JSON.stringify(readUpdateLog_()));
 }
