@@ -3,7 +3,8 @@
  * ARCHIVE_ROOT_FOLDER_ID、TIME_ZONE 這兩個常數）。
  *
  * 網址（除了 status，都要帶 key=密碼）：
- *   ?action=status → {ok, today, now, log:{批次編號:{at, file, warn}}}（各批次哪時用哪天的價格檔更新過；不用密碼）
+ *   ?action=status[&seen=批次,批次&stop=批次] → {ok, today, now, log:{批次編號:{at, file, warn}}}
+ *       （各批次哪時用哪天的價格檔更新過；不用密碼。seen/stop＝小幫手看到的今天批次／已停止批次，給定時寄信提醒用）
  *   ?action=log&batch=批次編號&file=價格檔日期&warn=異常數 → {ok}（更新批次價格成功後記一筆）
  *   ?action=list → {ok, today:'yyyy-MM-dd'（作業日：凌晨 0～6 點算前一天）, files:[{id, name, date:'yyyy-MM-dd'}]}（最新在前，最多 15 個）
  *   ?id=檔案ID   → {ok, name, date, header:[A..L 標題], rows:[[A..L], ...]}（只接受報價資料夾裡的價格檔）
@@ -26,7 +27,7 @@ function doGet(e) {
 
 function priceFeed_(p) {
   /* 更新紀錄（只有批次編號和時間，不含價格）：不用密碼，讓每台電腦都能提醒 */
-  if (p.action === 'status') return updateStatus_();
+  if (p.action === 'status') { recordSeen_(p.seen, p.stop); return updateStatus_(); }
   var key = PropertiesService.getScriptProperties().getProperty('PRICE_KEY');
   if (!key) return { ok: false, error: '還沒設定密碼（專案設定 → 指令碼屬性 PRICE_KEY）' };
   if (String(p.key || '') !== key) return { ok: false, badKey: true, error: '密碼不對' };
@@ -78,6 +79,73 @@ function logUpdate_(p) {
     PropertiesService.getScriptProperties().setProperty(UPDATE_LOG_PROP, JSON.stringify(log));
   } finally { lock.releaseLock(); }
   return { ok: true };
+}
+
+/* ===== 今天有哪些批次（小幫手讀出貨批次列表時順便回報，給定時寄信提醒用） =====
+ * 存在指令碼屬性 PRICE_SEEN_BATCHES：{ 批次編號: {day:'作業日 yyyy-MM-dd', stop:true?} }
+ * 只收批次編號開頭是「作業日」或「作業日隔天」(凌晨建的) 的批次。 */
+var SEEN_PROP = 'PRICE_SEEN_BATCHES';
+function readSeen_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(SEEN_PROP) || '{}'); }
+  catch (e) { return {}; }
+}
+function recordSeen_(seen, stop) {
+  var wd = workDay_(), day = Utilities.formatDate(wd, TIME_ZONE, 'yyyy-MM-dd');
+  var okPrefix = [Utilities.formatDate(wd, TIME_ZONE, 'yyMMdd'), Utilities.formatDate(new Date(wd.getTime() + 86400000), TIME_ZONE, 'yyMMdd')];
+  function pick(s) {
+    return String(s || '').split(',').filter(function (n) { return /^\d{8}$/.test(n) && okPrefix.indexOf(n.slice(0, 6)) >= 0; }).slice(0, 30);
+  }
+  var act = pick(seen), st = pick(stop);
+  if (!act.length && !st.length) return;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    var m = readSeen_(), changed = false;
+    act.forEach(function (n) { if (!m[n] || m[n].stop) { m[n] = { day: m[n] ? m[n].day : day }; changed = true; } });
+    st.forEach(function (n) { if (!m[n] || !m[n].stop) { m[n] = { day: m[n] ? m[n].day : day, stop: true }; changed = true; } });
+    if (!changed) return;
+    var cutoff = Utilities.formatDate(new Date(Date.now() - 10 * 86400000), TIME_ZONE, 'yyyy-MM-dd');
+    Object.keys(m).forEach(function (k) { if (!m[k] || String(m[k].day) < cutoff) delete m[k]; });
+    PropertiesService.getScriptProperties().setProperty(SEEN_PROP, JSON.stringify(m));
+  } finally { lock.releaseLock(); }
+}
+
+/* ===== 定時寄信提醒：今天的批次還沒更新價格 =====
+ * 排程（setupPriceReminder 建立）：每天 19:00 左右、凌晨 00:30 左右（還算前一天）各檢查一次。
+ * 有問題才寄信，寄給這個 Apps Script 的擁有者（程式碼裡不放信箱）。 */
+function priceReminderText_() {
+  var day = Utilities.formatDate(workDay_(), TIME_ZONE, 'yyyy-MM-dd');
+  var md = Number(day.slice(5, 7)) + '/' + Number(day.slice(8));
+  var log = readUpdateLog_(), seen = readSeen_();
+  var todays = Object.keys(seen).filter(function (k) { return seen[k].day === day && !seen[k].stop; }).sort();
+  var done = Object.keys(log).filter(function (k) { return log[k].file === day; }).sort();
+  var todo = todays.filter(function (k) { return done.indexOf(k) < 0; });
+  var problem = '', lines = [];
+  if (todo.length) problem = '今天（' + md + '）還有 ' + todo.length + ' 個批次沒更新價格';
+  else if (!done.length) problem = '今天（' + md + '）還沒有任何批次更新價格';
+  if (todo.length) lines.push('還沒更新：' + todo.join('、'));
+  lines.push('已更新：' + (done.length ? done.map(function (k) { return k + '（' + String(log[k].at).slice(11) + '）'; }).join('、') : '無'));
+  if (!todays.length) lines.push('（今天還沒有人用小幫手打開過出貨批次列表，所以不知道今天建了哪些批次）');
+  return { problem: problem, md: md, body: lines.join('\n') };
+}
+function checkPriceReminder() {
+  var r = priceReminderText_();
+  if (!r.problem) return;
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '⚠ 馬可：' + r.problem,
+    r.problem + '，請行政到後台按「馬可小幫手 → 💲 更新批次價格」。\n\n' + r.body +
+    '\n\n後台：https://supply-admin.super-marco.com/delivery-batch/list\n（這封信由 Apps Script「每日報價自動備份」的價格提醒寄出）');
+}
+/* 在編輯器手動執行一次：建立排程，並寄一封測試信 */
+function setupPriceReminder() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'checkPriceReminder') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('checkPriceReminder').timeBased().everyDays(1).atHour(19).nearMinute(0).inTimezone(TIME_ZONE).create();
+  ScriptApp.newTrigger('checkPriceReminder').timeBased().everyDays(1).atHour(0).nearMinute(30).inTimezone(TIME_ZONE).create();
+  var r = priceReminderText_();
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '✅ 馬可：價格更新提醒已設定（測試信）',
+    '之後每天 19:00 左右、凌晨 00:30 左右檢查一次，今天的批次有沒更新價格的才會寄信。\n\n目前狀態（' + r.md + '）：' + (r.problem || '沒有問題') + '\n' + r.body);
+  console.log('已建立排程並寄出測試信');
 }
 
 /* 價格檔名的日期（Mdd）＋ 月資料夾的年份 → yyyy-MM-dd */
