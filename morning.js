@@ -66,7 +66,7 @@
   box.style.cssText = 'position:fixed;inset:3vh 3vw;z-index:2147483647;background:#fff;border:2px solid #2e7d4f;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.3);font:14px/1.5 "Microsoft JhengHei",sans-serif;color:#222;display:flex;flex-direction:column;';
   box.innerHTML = '<div style="display:flex;align-items:center;gap:12px;background:#2e7d4f;color:#fff;padding:8px 14px;border-radius:8px 8px 0 0">' +
     '<b style="font-size:17px">☀️ 會計早上核對</b><span id="mk-mc-date" style="font-size:14px"></span><span style="flex:1"></span>' +
-    '<span style="font-size:12px;opacity:.85">第一階段：只檢查，不會改任何資料</span>' +
+    '<span style="font-size:12px;opacity:.85">只會檢查；只有勾選後按「改成已送達」才會改狀態</span>' +
     '<button id="mk-mc-x" style="background:none;border:0;color:#fff;font-size:20px;cursor:pointer">✕</button></div>' +
     '<div id="mk-mc-status" style="padding:8px 14px;color:#555;white-space:pre-line;border-bottom:1px solid #eee"></div>' +
     '<div id="mk-mc-body" style="flex:1;overflow:auto;padding:6px 14px 14px"></div>';
@@ -258,6 +258,59 @@
     } finally { f.remove(); }
   }
 
+  /* ---------- 一鍵已送達：訂單詳情頁「開始配送」→「已送達」（後台不能跳過配送中） ----------
+   * 只按文字完全相符的按鈕；「取消訂單」永遠不碰。跳出確認視窗時，只有視窗裡沒有「取消訂單」字樣才按確定。 */
+  function detailStatus(doc) {
+    var t = doc.body.innerText, i = t.lastIndexOf('訂單詳情');
+    if (i < 0 || t.indexOf('配送方式', i) < 0) return '';
+    return lines(t.slice(i, t.indexOf('配送方式', i))).find(function (s) { return STATUS_RE.test(s); }) || '';
+  }
+  var NEXT_BTN = { '已接單': /^開始配送$/, '揀貨完成': /^開始配送$/, '配送中': /^(已送達|完成配送|確認送達|送達完成)$/ };
+  async function deliverOne(o) {
+    var f = openFrame('/order/detail/' + o.id);
+    try {
+      for (var step = 0; step < 3; step++) {
+        var st = await waitFor(function () { return detailStatus(f.contentDocument); }, 30000, 300);
+        if (!st) return { ok: false, msg: '讀不到訂單狀態' };
+        if (st === '已送達') return { ok: true, msg: '✓ 已送達' };
+        var re = NEXT_BTN[st];
+        if (!re) return { ok: false, msg: '狀態是「' + st + '」，不處理' };
+        var d = f.contentDocument;
+        var b = [].find.call(d.querySelectorAll('button'), function (x) { return re.test(x.innerText.replace(/\s+/g, '')) && !x.disabled; });
+        if (!b) return { ok: false, msg: '找不到「' + (st === '配送中' ? '已送達' : '開始配送') + '」按鈕' };
+        b.click();
+        // 有確認視窗就按確定（視窗裡不能有「取消訂單」）
+        var dlgBtn = await waitFor(function () {
+          var dlg = [].find.call(d.querySelectorAll('[role=dialog]'), function (x) { return x.innerText.trim(); });
+          if (!dlg || /取消訂單|取消此訂單/.test(dlg.innerText)) return null;
+          return [].find.call(dlg.querySelectorAll('button'), function (x) { return /^(確定|確認|是|送出|確定送達)$/.test(x.innerText.replace(/\s+/g, '')); });
+        }, 2500, 200);
+        if (dlgBtn) dlgBtn.click();
+        var changed = await waitFor(function () { var s2 = detailStatus(f.contentDocument); return s2 && s2 !== st ? s2 : null; }, 15000, 300);
+        if (!changed) { f.contentWindow.location.reload(); await sleep(1500); }
+      }
+      return { ok: false, msg: '改了三次還不是已送達，請手動確認' };
+    } catch (e) { return { ok: false, msg: '錯誤：' + e.message }; }
+    finally { f.remove(); }
+  }
+  async function deliverPicked() {
+    var ids = [].map.call(document.querySelectorAll('.mk-mc-dv:checked'), function (c) { return c.value; });
+    var todo = R.orders.filter(function (o) { return ids.indexOf(o.id) >= 0; });
+    if (!todo.length) return;
+    $('mk-mc-dvgo').disabled = true;
+    var done = 0, fail = [];
+    await pool(todo, 2, async function (o) {
+      var el = document.querySelector('.mk-mc-dvst[data-id="' + o.id + '"]');
+      if (el) el.textContent = '處理中…';
+      var r = await deliverOne(o);
+      o.status = r.ok ? '已送達' : o.status;
+      if (el) { el.textContent = r.msg; el.style.color = r.ok ? '#1b5e20' : '#b71c1c'; }
+      if (r.ok) done++; else fail.push(o.customer + ' ' + o.no + '：' + r.msg);
+      status('改成已送達：' + done + '/' + todo.length + (fail.length ? '，失敗 ' + fail.length : ''));
+    });
+    $('mk-mc-dvmsg').innerHTML = '<b style="color:#1b5e20">完成 ' + done + ' 張</b>' + (fail.length ? '<div style="color:#b71c1c">' + fail.map(esc).join('<br>') + '</div>' : '');
+  }
+
   /* ---------- 5. 檢查規則 ---------- */
   var FREE_NOTE = /補送|贈送|招待|免費|不收|取消|缺貨|下錯/;
   function baseUnit(u) { return String(u || '').split('|')[0].replace(/[（(].*$/, '').trim(); }
@@ -406,11 +459,41 @@
     });
     h += section('🚚 運費要調整（同客戶當天合併）', '#1565c0', rows3 ? '<table style="width:100%;border-collapse:collapse" class="mk-mc-t"><tr><th>客戶</th><th>訂單</th><th>當天合計</th><th>免運門檻</th><th>目前運費</th><th>應該</th></tr>' + rows3 + '</table>' : '運費都正確 👍', frFix.length + ' 家');
 
-    // 4. 沒問題
-    h += section('✅ 沒發現問題的訂單', '#2e7d4f', okO.length ? okO.map(function (o) { return '<span style="display:inline-block;margin:2px 10px 2px 0">' + esc(o.customer) + ' ' + oLink(o) + (o.status !== '已接單' ? ' <span style="color:#888;font-size:12px">' + esc(o.status) + '</span>' : '') + '</span>'; }).join('') +
-      '<div style="color:#666;font-size:12px;margin-top:6px">下一步會在這裡加「一鍵改成已送達」。</div>' : '沒有', okO.length + ' 張');
+    // 4. 沒問題 → 勾選後一鍵改成已送達
+    var canDv = function (o) { return /^(已接單|揀貨完成|配送中)$/.test(o.status); };
+    var dvN = okO.filter(canDv).length;
+    h += section('✅ 沒發現問題的訂單', '#2e7d4f', okO.length ? okO.map(function (o) {
+      return '<label style="display:inline-block;margin:2px 12px 2px 0;cursor:pointer">' +
+        (canDv(o) ? '<input type="checkbox" class="mk-mc-dv" value="' + esc(o.id) + '"> ' : '') +
+        esc(o.customer) + ' ' + oLink(o) + ' <span class="mk-mc-dvst" data-id="' + esc(o.id) + '" style="color:#888;font-size:12px">' + (o.status !== '已接單' ? esc(o.status) : '') + '</span></label>';
+    }).join('') +
+      (dvN ? '<div style="margin-top:8px;display:flex;gap:10px;align-items:center"><a href="#" id="mk-mc-dvall" style="color:#2e7d4f;font-size:13px">全選（' + dvN + ' 張）</a><button id="mk-mc-dvgo" style="padding:8px 16px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">把勾選的 0 張改成「已送達」</button><span id="mk-mc-dvmsg" style="font-size:13px"></span></div>' +
+        '<div style="color:#666;font-size:12px;margin-top:4px">有問題的訂單（上面紅色、橘色）不在這裡，處理好後重新按一次「會計早上核對」。</div>' : '') : '沒有', okO.length + ' 張');
     $('mk-mc-body').innerHTML = '<style>.mk-mc-t th{background:#f5f5f5;text-align:left;padding:4px 6px;font-size:13px;position:sticky;top:0}.mk-mc-t td{border-top:1px solid #eee;padding:4px 6px;vertical-align:top;font-size:13px}</style>' + h;
+    var go = $('mk-mc-dvgo');
+    if (go) go.onclick = function () {
+      var n = document.querySelectorAll('.mk-mc-dv:checked').length;
+      if (!n) { $('mk-mc-dvmsg').textContent = '請先勾選訂單'; return; }
+      // 兩段確認：第一次按顯示確認，再按一次才執行
+      if (go.dataset.armed !== '1') {
+        go.dataset.armed = '1'; go.style.background = '#c62828';
+        go.textContent = '確定把 ' + n + ' 張改成已送達？再按一次執行（改了就不能退回）';
+        return;
+      }
+      go.textContent = '處理中…';
+      deliverPicked();
+    };
+    function resetGo() { if (go) { go.dataset.armed = ''; go.style.background = '#2e7d4f'; go.textContent = '把勾選的 ' + document.querySelectorAll('.mk-mc-dv:checked').length + ' 張改成「已送達」'; } }
+    [].forEach.call(document.querySelectorAll('.mk-mc-dv'), function (c) { c.onchange = resetGo; });
+    var all = $('mk-mc-dvall');
+    if (all) all.onclick = function (e) {
+      e.preventDefault();
+      var cbs = document.querySelectorAll('.mk-mc-dv'), on = [].every.call(cbs, function (c) { return c.checked; });
+      [].forEach.call(cbs, function (c) { c.checked = !on; });
+      resetGo();
+    };
   }
+  window.__MK_MC_RENDER = function () { render(); }; // 維護者除錯用
 
   /* 測試用：window.__MK_MC_DATE 可指定到貨日 */
   if (window.__MK_MC_DATE) { DATE = window.__MK_MC_DATE; $('mk-mc-date').textContent = '到貨日 ' + DATE; }
