@@ -25,6 +25,7 @@
 - 原始碼備份在 `apps-script/ok-list.gs`；實際執行的在試算表的 Apps Script 專案。
 - 介面：`GET ?action=list` → `{ok, list:[{status,customer,product,note,scope}]}`（只回「核准」「待審核」）；`GET ?action=submit&customer=&product=&note=&scope=此客戶|所有客戶&who=` → `{ok}` 或 `{ok, dup:true, status}`。
 - 更新程式要「管理部署作業 → 編輯 → 新版本」，**不要新增部署**（網址會變，`accept.js` 的 `OK_API` 要跟著改）。
+- 「待審核」提醒：mk.js 選單上方黃色一格（只顯示筆數）；另外 Apps Script「每日報價自動備份」的 okPendingReminder 每天 09:00、16:00 有待審核才寄信給主管，收件人在指令碼屬性 SUPERVISOR_EMAIL（不要寫進程式）。
 - 協作者不要直接重新部署正式的 Apps Script；修改先寫進 `apps-script/ok-list.gs` 開 Pull Request，由擁有者部署。
 
 ## 更新批次價格（price.js ＋ apps-script/price-feed.gs）
