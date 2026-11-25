@@ -315,33 +315,52 @@
   var FREE_NOTE = /補送|贈送|招待|免費|不收|取消|缺貨|下錯/;
   function baseUnit(u) { return String(u || '').split('|')[0].replace(/[（(].*$/, '').trim(); }
   var WEIGHT_U = /^(台斤|斤|公斤|兩|K|KG|kg|公克|克|g)$/;
+  /* 異常代碼和判斷門檻跟「理貨作業 Web App」的 checkRow 同一套（兩邊改規則要一起改）：
+   *   zero、same-as-qty、same-as-estimate、unit-06、too-much、far、each-weird、count-over
+   * 早上多一條 backfill-diff：後台數字跟理貨表格回填值不一樣（輸入時打錯，只有早上查得到）。
+   * 「數量異常學習清單」（常態 OK 清單試算表的分頁）裡「商品＋代碼」待審核／核准的，兩邊都不再提醒。 */
   function checkItem(it, pk) {
-    var flags = [], u = baseUnit(it.unit), weighByPiece = /秤重/.test(it.unit), isW = WEIGHT_U.test(u);
+    var flags = [], u = baseUnit(it.unit), byPiece = /秤重/.test(it.unit), isW = WEIGHT_U.test(u);
     var orig = pk ? pk.qty : NaN, cur = it.qty;
-    if (!isFinite(cur)) { flags.push({ lv: 2, t: '數量讀不到' }); return flags; }
+    var kg = pk && isFinite(pk.kg) ? pk.kg : NaN;                                   // 理貨實秤公斤
+    var expectedKg = pk && isFinite(orig) && isFinite(pk.conv) && pk.conv > 0 ? orig * pk.conv : NaN; // 預估公斤
+    if (!isFinite(cur)) { flags.push({ code: 'unreadable', lv: 2, t: '數量讀不到' }); return flags; }
     // 只有秤重的品項才比對回填值（按顆、按包的品項，理貨表格的回填是公斤換算，不適用）
-    if ((isW || weighByPiece) && pk && pk.back !== '' && isFinite(num(pk.back)) && Math.abs(cur - num(pk.back)) > 0.011)
-      flags.push({ lv: 2, t: '系統是 ' + fmt(cur) + '，理貨表格回填 ' + pk.back + '（可能打錯）' });
-    if (cur === 0 && !FREE_NOTE.test(it.note)) flags.push({ lv: 1, t: '數量 0（缺貨？請確認）' });
-    if (weighByPiece && isFinite(orig) && pk && pk.back === '' && Math.abs(cur - orig) < 0.001)
-      flags.push({ lv: 2, t: '秤重計價，但數量還是 ' + fmt(cur) + '（可能沒秤重）' });
-    else if (weighByPiece && !pk && Math.abs(cur - Math.round(cur)) < 0.001)
-      flags.push({ lv: 1, t: '秤重計價，數量是整數 ' + fmt(cur) + '（確認有沒有秤）' });
-    if (isFinite(orig) && orig > 0 && cur > 0) {
+    if ((isW || byPiece) && pk && pk.back !== '' && isFinite(num(pk.back)) && Math.abs(cur - num(pk.back)) > 0.011)
+      flags.push({ code: 'backfill-diff', lv: 2, t: '系統是 ' + fmt(cur) + '，理貨表格回填 ' + pk.back + '（可能打錯）' });
+    if (cur === 0) { if (!FREE_NOTE.test(it.note)) flags.push({ code: 'zero', lv: 1, t: '數量 0（缺貨？請確認）' }); return flags; }
+    if (byPiece && isFinite(orig) && Math.abs(cur - orig) < 0.001 && (!pk || pk.back === ''))
+      flags.push({ code: 'same-as-qty', lv: 2, t: '秤重計價，但數量還是 ' + fmt(cur) + '（跟訂購一樣，可能沒秤重）' });
+    if (byPiece && isFinite(kg) && isFinite(expectedKg) && expectedKg > 0 && Math.abs(kg - expectedKg) < 0.001)
+      flags.push({ code: 'same-as-estimate', lv: 2, t: '實秤 ' + fmt(kg) + ' 公斤剛好等於預估（秤重計價卻像沒秤，照抄預估）' });
+    if (isFinite(orig) && orig > 0) {
       var ratio = cur / orig;
-      if (isW && ((ratio >= 0.55 && ratio <= 0.65) || (ratio >= 1.55 && ratio <= 1.75)))
-        flags.push({ lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（剛好差 0.6 倍，可能台斤／公斤搞混）' });
-      else if (isW && (ratio > 1.5 || ratio < 0.6))
-        flags.push({ lv: 1, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（差很多，請確認）' });
-      else if (!isW && !weighByPiece && ratio > 3)
-        flags.push({ lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（多很多，可能打錯）' });
-      if (weighByPiece) { // 一個多重：數量是台斤
-        var kgEach = cur * 0.6 / orig;
-        if (kgEach > 15 || kgEach < 0.05) flags.push({ lv: 2, t: '一個約 ' + fmt(kgEach) + ' 公斤（不合理，可能打錯）' });
+      if (isW || byPiece) {
+        if (isW && ((ratio >= 0.55 && ratio <= 0.65) || (ratio >= 1.55 && ratio <= 1.75)))
+          flags.push({ code: 'unit-06', lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（剛好差 0.6 倍，可能台斤／公斤搞混）' });
+        else if (ratio > 5)
+          flags.push({ code: 'too-much', lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（太誇張）' });
+        else if (isW && (ratio > 1.5 || ratio < 0.6))
+          flags.push({ code: 'far', lv: 1, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（差很多，請確認）' });
+        if (byPiece) { // 一個多重：有實秤公斤就用實秤，沒有就用台斤換算
+          var each = (isFinite(kg) ? kg : cur * 0.6) / orig;
+          if (each > 15 || each < 0.05) flags.push({ code: 'each-weird', lv: 2, t: '一個約 ' + fmt(each) + ' 公斤（不合理，可能打錯）' });
+        }
+      } else if (ratio > 3) {
+        flags.push({ code: 'count-over', lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（多很多，可能打錯）' });
       }
     }
-    if (isW && cur > 0 && isFinite(orig) && orig > 0 && cur / orig > 5) flags.push({ lv: 2, t: '數量 ' + fmt(cur) + ' 太誇張' });
     return flags;
+  }
+  /* 數量異常學習清單：{ '商品|代碼': 狀態 }（讀常態 OK 清單網路程式 ?action=learned；讀不到就當作空的，照樣提醒） */
+  var OK_API = 'https://script.google.com/macros/s/AKfycbxQK0BUWNmiNjh5sbU77y8X0YnerMfF7eakGQMjZJQxwsZBcw0Lh0QTDHjBognWIikpew/exec';
+  async function readLearned() {
+    try {
+      var j = await (await fetch(OK_API + '?action=learned&t=' + Date.now())).json();
+      var map = {};
+      ((j && j.list) || []).forEach(function (x) { if (x.code && x.product) map[String(x.product).trim() + '|' + x.code] = x.status || true; });
+      return map;
+    } catch (e) { return {}; }
   }
 
   /* ---------- 主流程 ---------- */
@@ -353,10 +372,10 @@
       var orders = (await readOrderList(DATE)).filter(function (o) { return o.status !== '已取消'; });
       if (!orders.length) { status('今天（' + DATE + '）沒有到貨的訂單。'); return; }
       var T = await priceTools();
-      var pkP = readPicking(), frP = readFreight();
+      var pkP = readPicking(), frP = readFreight(), lnP = readLearned();
       var bi = await readBatchItems(T, DATE, orders.map(function (o) { return o.id; }));
       status('讀理貨表格、運費群組…');
-      var pk = await pkP, fr = await frP;
+      var pk = await pkP, fr = await frP, learned = await lnP, skippedByLearn = 0;
       var pmap = pk.map || {};
       orders.forEach(function (o) {
         o.items = bi.items[o.id] || null;
@@ -367,7 +386,10 @@
         o.items.forEach(function (it) {
           var p = pmap[it.itemId];
           it.pk = p || null;
-          it.flags = checkItem(it, p);
+          it.flags = checkItem(it, p).filter(function (f) {
+            if (f.code && learned[String(it.name).trim() + '|' + f.code]) { skippedByLearn++; return false; }
+            return true;
+          });
           if (it.flags.length) o.flags.push({ item: it });
           // 價格 0：數量 0、或備註寫了補送／取消／缺貨等（本來就不收錢）不算，其他才是要補價的實價／外購品
           if (!(it.price > 0)) { if (it.qty > 0 && !FREE_NOTE.test(it.note)) o.zero.push(it); else o.freeN = (o.freeN || 0) + 1; }
@@ -396,7 +418,7 @@
         status('讀取 ' + fixOrders.length + ' 張要調運費的訂單明細…');
         await pool(fixOrders, 3, async function (o) { o.priceInfo = await readPriceInfo(o.id); });
       }
-      R = { orders: orders, freight: freight, pk: pk, fr: fr, secs: Math.round((Date.now() - T0) / 1000) };
+      R = { orders: orders, freight: freight, pk: pk, fr: fr, skippedByLearn: skippedByLearn, learnedN: Object.keys(learned).length, secs: Math.round((Date.now() - T0) / 1000) };
       window.__MK_MC_R = R; // 給維護者除錯用
       render();
     } catch (e) {
@@ -421,6 +443,7 @@
     var cnt = {}; os.forEach(function (o) { cnt[o.status] = (cnt[o.status] || 0) + 1; });
     status('今天到貨 ' + os.length + ' 張（' + Object.keys(cnt).map(function (k) { return k + ' ' + cnt[k]; }).join('、') + '），用時 ' + R.secs + ' 秒。' +
       (R.pk.error ? '\n⚠ ' + R.pk.error : '　理貨表格 ' + R.pk.files.length + ' 份') +
+      '　數量異常學習清單 ' + R.learnedN + ' 條' + (R.skippedByLearn ? '（略過 ' + R.skippedByLearn + ' 項）' : '') +
       '　運費群組：' + R.fr.groups.map(function (g) { return g.skipped ? g.name + '(略過)' : g.name + ' ' + g.n + ' 家'; }).join('、') + '、其他 ' + R.fr.def + ' 免運');
 
     var h = '';

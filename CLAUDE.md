@@ -23,7 +23,7 @@
 
 ## 常態 OK 清單 Apps Script
 - 原始碼備份在 `apps-script/ok-list.gs`；實際執行的在試算表的 Apps Script 專案。
-- 介面：`GET ?action=list` → `{ok, list:[{status,customer,product,note,scope}]}`（只回「核准」「待審核」）；`GET ?action=submit&customer=&product=&note=&scope=此客戶|所有客戶&who=` → `{ok}` 或 `{ok, dup:true, status}`。
+- 介面：`GET ?action=list` → `{ok, list:[{status,customer,product,note,scope}]}`（只回「核准」「待審核」）；`GET ?action=learned` → 數量異常學習清單 `{ok, list:[{status,product,code}]}`；`GET ?action=submit&customer=&product=&note=&scope=此客戶|所有客戶&who=` → `{ok}` 或 `{ok, dup:true, status}`。
 - 更新程式要「管理部署作業 → 編輯 → 新版本」，**不要新增部署**（網址會變，`accept.js` 的 `OK_API` 要跟著改）。
 - 「待審核」提醒：mk.js 選單上方黃色一格（只顯示筆數）；另外 Apps Script「每日報價自動備份」的 okPendingReminder 每天 09:00、16:00 有待審核才寄信給主管，收件人在指令碼屬性 SUPERVISOR_EMAIL（不要寫進程式）。
 - 協作者不要直接重新部署正式的 Apps Script；修改先寫進 `apps-script/ok-list.gs` 開 Pull Request，由擁有者部署。
@@ -42,6 +42,8 @@
 
 ## 會計早上核對（morning.js，2026-11-24 第一階段）
 - 第一階段只檢查不改資料。「一鍵已送達」2026-11-24 晚上上線但還沒實測：訂單詳情頁按「開始配送」再按「已送達」（後台不能跳過配送中），預設都不勾、按鈕要按兩次。之後要加：面板填實價品重量／價格、運費改 0、指定客戶「正本」列印（一張訂單一張、預算制不印價、藍色正本章，名單放在常態 OK 清單試算表的新分頁）。
+- **重量檢查跟「理貨作業 Web App」同一套**（2026-11-25 對齊）：異常代碼 zero、same-as-qty、same-as-estimate、unit-06、too-much、far、each-weird、count-over 和門檻兩邊一致（morning.js checkItem ↔ 理貨 App checkRow），改規則要兩邊一起改。早上多一條 backfill-diff（後台 vs 理貨表格回填）。資料來源都是理貨表格。
+- 「數量異常學習清單」＝常態 OK 清單試算表的分頁（理貨 App 寫入）；morning.js 讀 OK 網路程式 `?action=learned`（ok-list.gs 已加、**還沒部署新版本**，部署前讀到 0 條）。商品＋代碼 待審核／核准 → 不再提醒。
 - 運費規則：同客戶當天訂單合計（改完量價後）達門檻 → 全部 0；沒達到 → 只收一次（100）；自取不收。門檻讀後台「店鋪配置／運費群組」（指定客戶），其他用默認群組。有些單用「商家優惠 −100」抵運費。
 - 運費群組的編輯頁只能讀，不要按儲存；離開時會跳「有未儲存變更」，用隱藏 iframe 讀就不會。
 - 自有訂單列表一開始會顯示「全部(0)」約 10 秒，要等數字出來。
