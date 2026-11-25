@@ -176,6 +176,35 @@ function checkPriceReminder() {
     r.problem + '，請行政到後台按「馬可小幫手 → 💲 更新批次價格」。\n\n' + r.body +
     '\n\n後台：https://supply-admin.super-marco.com/delivery-batch/list\n（這封信由 Apps Script「每日報價自動備份」的價格提醒寄出）');
 }
+/* ===== 常態 OK 清單「待審核」提醒信：寄給主管 =====
+ * 收件人放在指令碼屬性 SUPERVISOR_EMAIL（程式碼和 GitHub 都不放信箱）。
+ * 排程（setupOkReminder 建立）：每天 09:00、16:00 左右各檢查一次，有待審核才寄；信裡只寫筆數和連結。 */
+var OK_LIST_API = 'https://script.google.com/macros/s/AKfycbxQK0BUWNmiNjh5sbU77y8X0YnerMfF7eakGQMjZJQxwsZBcw0Lh0QTDHjBognWIikpew/exec';
+var OK_SHEET_URL = 'https://docs.google.com/spreadsheets/d/17vD0XABzHYb6wLdZcL94xV4zEflM8MF7v4yyhJ7cc5o/edit';
+function okPendingCount_() {
+  var res = UrlFetchApp.fetch(OK_LIST_API + '?action=list', { muteHttpExceptions: true, followRedirects: true });
+  var j = JSON.parse(res.getContentText().replace(/^﻿/, ''));
+  return ((j && j.list) || []).filter(function (x) { return x.status === '待審核'; }).length;
+}
+function okPendingReminder() {
+  var to = PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL');
+  if (!to) return;
+  var n = okPendingCount_();
+  if (!n) return;
+  MailApp.sendEmail(to, '📝 馬可：常態 OK 清單有 ' + n + ' 筆待審核',
+    '常態 OK 清單有 ' + n + ' 筆備註等主管審核。\n請打開試算表，把狀態改成「核准」或「退回」：\n' + OK_SHEET_URL +
+    '\n\n（這封信由 Apps Script「每日報價自動備份」寄出，每天 09:00、16:00 檢查，有待審核才寄）');
+}
+/* 在編輯器手動執行一次：建立待審核提醒排程（不寄信，只在記錄裡顯示目前幾筆） */
+function setupOkReminder() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'okPendingReminder') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('okPendingReminder').timeBased().everyDays(1).atHour(9).nearMinute(0).inTimezone(TIME_ZONE).create();
+  ScriptApp.newTrigger('okPendingReminder').timeBased().everyDays(1).atHour(16).nearMinute(0).inTimezone(TIME_ZONE).create();
+  console.log('已建立待審核提醒排程；收件人' + (PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL') ? '已設定' : '還沒設定') + '；目前待審核 ' + okPendingCount_() + ' 筆');
+}
+
 /* 在編輯器手動執行一次：建立排程，並寄一封測試信 */
 function setupPriceReminder() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
