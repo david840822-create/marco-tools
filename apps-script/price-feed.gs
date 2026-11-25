@@ -177,32 +177,47 @@ function checkPriceReminder() {
     '\n\n後台：https://supply-admin.super-marco.com/delivery-batch/list\n（這封信由 Apps Script「每日報價自動備份」的價格提醒寄出）');
 }
 /* ===== 常態 OK 清單「待審核」提醒信：寄給主管 =====
- * 收件人放在指令碼屬性 SUPERVISOR_EMAIL（程式碼和 GitHub 都不放信箱）。
- * 排程（setupOkReminder 建立）：每天 09:00、16:00 左右各檢查一次，有待審核才寄；信裡只寫筆數和連結。 */
-var OK_LIST_API = 'https://script.google.com/macros/s/AKfycbxQK0BUWNmiNjh5sbU77y8X0YnerMfF7eakGQMjZJQxwsZBcw0Lh0QTDHjBognWIikpew/exec';
-var OK_SHEET_URL = 'https://docs.google.com/spreadsheets/d/17vD0XABzHYb6wLdZcL94xV4zEflM8MF7v4yyhJ7cc5o/edit';
-function okPendingCount_() {
-  var res = UrlFetchApp.fetch(OK_LIST_API + '?action=list', { muteHttpExceptions: true, followRedirects: true });
-  var j = JSON.parse(res.getContentText().replace(/^﻿/, ''));
-  return ((j && j.list) || []).filter(function (x) { return x.status === '待審核'; }).length;
+ * 收件人放在指令碼屬性 SUPERVISOR_EMAIL（可多個，用逗號隔開；程式碼和 GitHub 都不放信箱）。
+ * 排程（setupOkReminder 建立）：每天 10:00、16:00 左右各檢查一次（主管 17:00 上班，16:00 先通知），
+ * 「常態 OK 清單」或「數量異常學習清單」有待審核才寄；信裡寫筆數和直接打開該分頁的連結。 */
+var OK_SPREADSHEET_ID = '17vD0XABzHYb6wLdZcL94xV4zEflM8MF7v4yyhJ7cc5o';
+var OK_SHEET_URL = 'https://docs.google.com/spreadsheets/d/' + OK_SPREADSHEET_ID + '/edit';
+/* 直接讀試算表（不經過網路程式）：回傳 [{name, n, url}] */
+function okPendingCounts_() {
+  var token = ScriptApp.getOAuthToken(), out = [];
+  [['常態OK清單', '常態 OK 清單（訂單備註）'], ['數量異常學習清單', '數量異常學習清單（重量／數量異常）']].forEach(function (s) {
+    var res = UrlFetchApp.fetch('https://docs.google.com/spreadsheets/d/' + OK_SPREADSHEET_ID + '/gviz/tq?tqx=out:csv&headers=1&sheet=' + encodeURIComponent(s[0]),
+      { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return;
+    var csv = Utilities.parseCsv(res.getContentText());
+    if (!csv.length || String(csv[0][0]).indexOf('狀態') < 0) return; // 分頁不存在時 gviz 會回第一個分頁
+    var n = csv.slice(1).filter(function (r) { return String(r[0]).trim() === '待審核'; }).length;
+    out.push({ name: s[1], n: n });
+  });
+  return out;
 }
 function okPendingReminder() {
   var to = PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL');
   if (!to) return;
-  var n = okPendingCount_();
-  if (!n) return;
-  MailApp.sendEmail(to, '📝 馬可：常態 OK 清單有 ' + n + ' 筆待審核',
-    '常態 OK 清單有 ' + n + ' 筆備註等主管審核。\n請打開試算表，把狀態改成「核准」或「退回」：\n' + OK_SHEET_URL +
-    '\n\n（這封信由 Apps Script「每日報價自動備份」寄出，每天 09:00、16:00 檢查，有待審核才寄）');
+  var list = okPendingCounts_().filter(function (x) { return x.n > 0; });
+  if (!list.length) return;
+  var total = list.reduce(function (s, x) { return s + x.n; }, 0);
+  MailApp.sendEmail(to, '📝 馬可：有 ' + total + ' 筆待主管審核',
+    list.map(function (x) { return '・' + x.name + '：' + x.n + ' 筆待審核'; }).join('\n') +
+    '\n\n點這裡直接打開試算表，在 A 欄把「待審核」改成「核准」或「退回」就好：\n' + OK_SHEET_URL +
+    '\n（下方分頁可切換「常態OK清單」和「數量異常學習清單」）' +
+    '\n\n（這封信由 Apps Script「每日報價自動備份」寄出，每天 10:00、16:00 檢查，有待審核才寄）');
 }
 /* 在編輯器手動執行一次：建立待審核提醒排程（不寄信，只在記錄裡顯示目前幾筆） */
 function setupOkReminder() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'okPendingReminder') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('okPendingReminder').timeBased().everyDays(1).atHour(9).nearMinute(0).inTimezone(TIME_ZONE).create();
+  ScriptApp.newTrigger('okPendingReminder').timeBased().everyDays(1).atHour(10).nearMinute(0).inTimezone(TIME_ZONE).create();
   ScriptApp.newTrigger('okPendingReminder').timeBased().everyDays(1).atHour(16).nearMinute(0).inTimezone(TIME_ZONE).create();
-  console.log('已建立待審核提醒排程；收件人' + (PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL') ? '已設定' : '還沒設定') + '；目前待審核 ' + okPendingCount_() + ' 筆');
+  var to = PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL') || '';
+  console.log('已建立待審核提醒排程（10:00、16:00）；收件人 ' + (to ? to.split(',').length + ' 位' : '還沒設定') + '；目前 ' +
+    okPendingCounts_().map(function (x) { return x.name + ' ' + x.n + ' 筆'; }).join('、'));
 }
 
 /* 在編輯器手動執行一次：建立排程，並寄一封測試信 */
