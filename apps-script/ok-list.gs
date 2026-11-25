@@ -52,10 +52,21 @@ function out_(o, cb) {
   return ContentService.createTextOutput(t).setMimeType(ContentService.MimeType.JSON);
 }
 
-// 讀清單：?action=list　送審：?action=submit&customer=&product=&note=&scope=&who=
+// 數量異常學習清單（理貨 Web App 寫入、會計早上核對讀取；待審核／核准＝以後不提醒，退回＝無效）
+var LEARN_SHEET = '數量異常學習清單';
+function learned_() {
+  var s = SpreadsheetApp.getActive().getSheetByName(LEARN_SHEET);
+  if (!s || s.getLastRow() < 2) return [];
+  return s.getRange(2, 1, s.getLastRow() - 1, 3).getValues().map(function (r) {
+    return { status: String(r[0]).trim(), product: String(r[1]).trim(), code: String(r[2]).trim() };
+  }).filter(function (x) { return x.product && x.code && (x.status === '核准' || x.status === '待審核'); });
+}
+
+// 讀清單：?action=list　送審：?action=submit&customer=&product=&note=&scope=&who=　學習清單：?action=learned
 function doGet(e) {
   var p = (e && e.parameter) || {};
   if (p.action === 'submit') return out_(submit_(p), p.callback);
+  if (p.action === 'learned') return out_({ ok: true, list: learned_() }, p.callback);
   var list = rows_().filter(function (x) { return x.status === '核准' || x.status === '待審核'; });
   return out_({ ok: true, list: list }, p.callback);
 }
