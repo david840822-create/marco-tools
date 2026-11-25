@@ -39,6 +39,23 @@
   document.body.appendChild(box);
   document.getElementById('mk-menu-x').onclick = function () { box.remove(); };
 
+  /* ---------- 常態 OK 清單有「待審核」：選單最上面提醒主管去審 ---------- */
+  var OK_API = 'https://script.google.com/macros/s/AKfycbxQK0BUWNmiNjh5sbU77y8X0YnerMfF7eakGQMjZJQxwsZBcw0Lh0QTDHjBognWIikpew/exec';
+  function escH(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  var okNote = document.createElement('div');
+  okNote.id = 'mk-menu-ok';
+  okNote.style.display = 'none';
+  box.insertBefore(okNote, box.children[1]);
+  fetch(OK_API + '?action=list&t=' + Date.now()).then(function (r) { return r.json(); }).then(function (j) {
+    var pend = ((j && j.list) || []).filter(function (x) { return x.status === '待審核'; });
+    if (!pend.length) return;
+    okNote.style.cssText = 'padding:8px 12px;font-size:13px;line-height:1.45;cursor:pointer;background:#fff4cc;color:#8a5a00;border-top:1px solid #f0d27a;';
+    okNote.innerHTML = '📝 常態 OK 清單有 <b>' + pend.length + ' 筆待審核</b>' +
+      '<div style="font-size:12px">' + pend.slice(0, 3).map(function (x) { return escH(x.customer + '／' + (x.product || '') + '：' + x.note); }).join('<br>') +
+      (pend.length > 3 ? '<br>…還有 ' + (pend.length - 3) + ' 筆' : '') + '</div><div style="font-size:12px;margin-top:2px">👉 主管點這裡打開試算表審核</div>';
+    okNote.onclick = function () { window.open(SHEET_URL, '_blank'); };
+  }).catch(function () {});
+
   /* ---------- 每天提醒：今天的出貨批次有沒有更新價格（紀錄由「更新批次價格」寫入，三台電腦共用） ---------- */
   var PRICE_API = 'https://script.google.com/macros/s/AKfycbwkph6A7dMEcndMv1WhczRhX0O0EIbZ3XPCgC4DUuAjybAHYP9zRkVJ9c_BN6jWUexW/exec';
   var note = document.createElement('div');
