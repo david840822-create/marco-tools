@@ -192,10 +192,10 @@
   /* ---------- 3. 理貨表格回填值 ---------- */
   async function readPicking() {
     var key = getKey();
-    if (!key) return { error: '這台電腦還沒輸入「價格密碼」（先按一次「更新批次價格」輸入），所以沒辦法比對理貨表格' };
+    if (!key) return { needKey: true, error: '這台電腦還沒輸入「價格密碼」，讀不到理貨表格' };
     try {
       var r = await (await fetch(PRICE_API + '?key=' + encodeURIComponent(key) + '&action=picking&days=3', { redirect: 'follow' })).json();
-      if (!r.ok) return { error: r.badKey ? '價格密碼不對' : (r.error || '讀不到理貨表格') };
+      if (!r.ok) return r.badKey ? { needKey: true, error: '價格密碼不對，讀不到理貨表格' } : { error: r.error || '讀不到理貨表格' };
       var map = {};
       r.rows.forEach(function (x) { map[x[0]] = { customer: x[1], name: x[2], qty: num(x[3]), unit: x[4], kg: x[5] === '' ? NaN : num(x[5]), conv: num(x[6]), isConv: String(x[7]) === '1', back: String(x[8] == null ? '' : x[8]).trim() }; });
       return { map: map, files: r.files };
@@ -468,6 +468,14 @@
       '　運費群組：' + R.fr.groups.map(function (g) { return g.skipped ? g.name + '(略過)' : g.name + ' ' + g.n + ' 家'; }).join('、') + '、其他 ' + R.fr.def + ' 免運');
 
     var h = '';
+    // 0. 讀不到理貨表格：重量檢查等於沒做，要大大提醒（沒有原訂數量就比不出 0.6 倍、差很多）
+    if (R.pk.error) {
+      h += '<div style="margin-top:10px;background:#fdecea;border:2px solid #c62828;border-radius:8px;padding:10px 12px;color:#b71c1c">' +
+        '<b style="font-size:16px">⚠ ' + esc(R.pk.error) + '，重量／數量檢查大部分沒有做！</b>' +
+        '<div style="color:#333;margin-top:4px">下面「沒發現問題」不代表重量沒問題。' + (R.pk.needKey ? '請負責人輸入「價格密碼」（跟「更新批次價格」同一組，只存在這台電腦），輸入後會重新核對：' : '請稍後再按一次「會計早上核對」。') + '</div>' +
+        (R.pk.needKey ? '<div style="margin-top:6px;display:flex;gap:6px;max-width:420px"><input id="mk-mc-key" type="password" autocomplete="off" placeholder="價格密碼" style="flex:1;font:inherit;padding:4px 6px"><button id="mk-mc-keyok" style="font:inherit;padding:4px 14px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;cursor:pointer">儲存並重新核對</button></div>' : '') +
+        '</div>';
+    }
     // 1. 重量／數量可疑
     var rows1 = '';
     flagged.forEach(function (o) {
@@ -514,6 +522,14 @@
       (dvN ? '<div style="margin-top:8px;display:flex;gap:10px;align-items:center"><a href="#" id="mk-mc-dvall" style="color:#2e7d4f;font-size:13px">全選（' + dvN + ' 張）</a><button id="mk-mc-dvgo" style="padding:8px 16px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">把勾選的 0 張改成「已送達」</button><span id="mk-mc-dvmsg" style="font-size:13px"></span></div>' +
         '<div style="color:#666;font-size:12px;margin-top:4px">有問題的訂單（上面紅色、橘色）不在這裡，處理好後重新按一次「會計早上核對」。</div>' : '') : '沒有', okO.length + ' 張');
     $('mk-mc-body').innerHTML = '<style>.mk-mc-t th{background:#f5f5f5;text-align:left;padding:4px 6px;font-size:13px;position:sticky;top:0}.mk-mc-t td{border-top:1px solid #eee;padding:4px 6px;vertical-align:top;font-size:13px}</style>' + h;
+    var keyOk = $('mk-mc-keyok');
+    if (keyOk) keyOk.onclick = function () {
+      var k = ($('mk-mc-key').value || '').trim();
+      if (!k) return;
+      try { localStorage.setItem(KEY_STORE, k); } catch (e) {}
+      $('mk-mc-body').innerHTML = '';
+      run();
+    };
     var go = $('mk-mc-dvgo');
     if (go) go.onclick = function () {
       var n = document.querySelectorAll('.mk-mc-dv:checked').length;
