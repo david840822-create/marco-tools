@@ -24,7 +24,7 @@
   }
   if (window.__tallyImport && window.__tallyImport.alive) { window.__tallyImport.show(); return; }
 
-  var VERSION = '2026-11-26a';
+  var VERSION = '2026-11-26b';
   var ORIGIN = location.origin;
   var SDK = 'https://www.gstatic.com/firebasejs/10.14.1/';
   var URL_KEY = 'mk-tally-url', MODE_KEY = 'mk-tally-import-mode', NAME_KEY = 'mk-tally-station';
@@ -252,6 +252,14 @@
     }
   }
 
+  // 每次匯入（成功或失敗）都加一筆到 marco.log，理貨儀表板的「匯入紀錄」會列出來（第幾次、誰、後台訊息）
+  function logEntry(ok, rev, msg) {
+    return window.firebase.firestore.FieldValue.arrayUnion({
+      at: Date.now(), ok: Boolean(ok), rev: Number(rev || 0), by: '自動匯入（' + station + '）',
+      msg: String(msg || '').slice(0, 200), dry: Boolean(DRY)
+    });
+  }
+
   /* ---------- 匯入一批 ---------- */
   async function runImport(fileId, manual) {
     if (busy) return;
@@ -270,6 +278,7 @@
         tx.update(ref, {
           'marco.status': 'importing', 'marco.at': Date.now(), 'marco.by': '自動匯入（' + station + '）',
           'marco.rev': claimedRev, 'marco.tries': m.status === 'error' ? Number(m.tries || 1) + 1 : 1,
+          'marco.startedAt': Date.now(),
           'marco.msg': window.firebase.firestore.FieldValue.delete()
         });
       });
@@ -300,7 +309,8 @@
       var failed = !msg || /失敗|錯誤|error|fail|找不到|不存在|無法/i.test(msg);
       await ref.update({
         'marco.status': failed ? 'error' : 'done', 'marco.at': Date.now(), 'marco.rev': claimedRev,
-        'marco.msg': msg || '後台沒有顯示匯入結果', 'marco.file': fileName, 'marco.bytes': bytes.length, 'marco.dry': DRY
+        'marco.msg': msg || '後台沒有顯示匯入結果', 'marco.file': fileName, 'marco.bytes': bytes.length, 'marco.dry': DRY,
+        'marco.log': logEntry(!failed, claimedRev, msg || '後台沒有顯示匯入結果')
       });
       log((failed ? '⚠ 匯入失敗：' : '✓ 已匯入：') + info.name + '｜後台訊息：' + (msg || '（沒有）'));
     } catch (e) {
@@ -309,7 +319,7 @@
       else {
         log('⚠ 匯入失敗：' + info.name + '｜' + text);
         if (/登出|login/i.test(text)) marcoLogin = { ok: false, at: Date.now() };
-        try { await ref.update({ 'marco.status': 'error', 'marco.at': Date.now(), 'marco.msg': text }); } catch (e2) {}
+        try { await ref.update({ 'marco.status': 'error', 'marco.at': Date.now(), 'marco.msg': text, 'marco.log': logEntry(false, claimedRev, text) }); } catch (e2) {}
       }
     } finally {
       busy = null; heartbeat(); render();

@@ -56,6 +56,7 @@
 - 說明在 README「四之三」。資料來源＝理貨作業 App（另一個 Apps Script 專案，網址每台電腦自己貼，不進 repo）。
 - 匯入會改正式訂單數量（後台是覆蓋）：測試一律用試跑 `window.__TALLY_IMPORT_DRYRUN = true`；真的匯入要有人在場、指定批次。測試批次永遠不匯入，不要拿掉這個保護。
 - 暫存區狀態欄位 `tallyStage/{批次檔ID}.marco`：pending（待匯入）→ importing → done／error；理貨儀表板也讀這個欄位，改格式要兩邊一起改。
+- 每次匯入（成功或失敗）用 `arrayUnion` 加一筆到 `marco.log`（at, ok, rev, by, msg, dry），開始匯入時寫 `marco.startedAt`；理貨儀表板裝箱頁的「匯入馬可」進度條和「匯入紀錄」讀這兩個。`tallyMeta/importer` 每分鐘回報一次，儀表板 3 分鐘沒收到就顯示「辦公室匯入電腦沒開」。
 
 ## 業務規則（使用者定的）
 - 檢查待接單的日期：早上 6 點以後 → 明天；0～6 點 → 今天。
