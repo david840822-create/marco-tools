@@ -383,6 +383,15 @@
       .catch(function () { var el = $('mk-mc-status'); if (el) el.textContent += '　（異常紀錄沒送出）'; });
   }
 
+  /* 會計回報 → 常態 OK 清單網路程式（異常紀錄填處理結果；誤報送學習清單；漏抓新增一列） */
+  var FB = [];
+  function sendFeedback(p) {
+    p.action = 'feedback'; p.who = '會計';
+    return fetch(OK_API, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(p) }).catch(function () {
+      alert('回報沒送出（網路問題），請稍後再按一次。');
+    });
+  }
+
   /* ---------- 主流程 ---------- */
   var R = null;
   async function run() {
@@ -468,6 +477,7 @@
       '　運費群組：' + R.fr.groups.map(function (g) { return g.skipped ? g.name + '(略過)' : g.name + ' ' + g.n + ' 家'; }).join('、') + '、其他 ' + R.fr.def + ' 免運');
 
     var h = '';
+    FB = [];
     // 0. 讀不到理貨表格：重量檢查等於沒做，要大大提醒（沒有原訂數量就比不出 0.6 倍、差很多）
     if (R.pk.error) {
       h += '<div style="margin-top:10px;background:#fdecea;border:2px solid #c62828;border-radius:8px;padding:10px 12px;color:#b71c1c">' +
@@ -484,7 +494,13 @@
         var it = f.item;
         rows1 += '<tr><td>' + esc(o.customer) + '</td><td>' + oLink(o) + '</td><td>' + esc(it.name) + '</td><td>' + esc(it.unit) + '</td><td style="text-align:right">' +
           (it.pk ? fmt(it.pk.qty) + ' → ' : '') + '<b>' + fmt(it.qty) + '</b>' + (it.pk && isFinite(it.pk.kg) ? '<div style="color:#888;font-size:12px">秤 ' + fmt(it.pk.kg) + ' kg</div>' : '') + '</td><td>' +
-          it.flags.map(function (x) { return '<div style="color:' + (x.lv > 1 ? '#b71c1c' : '#8a5a00') + '">' + (x.lv > 1 ? '⚠ ' : '？ ') + esc(x.t) + '</div>'; }).join('') + '</td></tr>';
+          it.flags.map(function (x) {
+            var k = FB.push({ o: o, it: it, f: x }) - 1;
+            return '<div style="color:' + (x.lv > 1 ? '#b71c1c' : '#8a5a00') + '">' + (x.lv > 1 ? '⚠ ' : '？ ') + esc(x.t) +
+              ' <span class="mk-fb" data-k="' + k + '" style="white-space:nowrap">' +
+              '<button class="mk-fbb" data-r="確認有錯" style="font-size:12px;padding:0 6px;margin-left:4px;cursor:pointer">✓ 確認有錯</button>' +
+              '<button class="mk-fbb" data-r="正常（誤報）" style="font-size:12px;padding:0 6px;margin-left:4px;cursor:pointer">✗ 這是正常的</button></span></div>';
+          }).join('') + '</td></tr>';
       });
     });
     h += section('⚠ 重量／數量要確認', '#c62828', rows1 ? '<table style="width:100%;border-collapse:collapse" class="mk-mc-t"><tr><th>客戶</th><th>訂單</th><th>品名</th><th>單位</th><th>原訂 → 現在</th><th>原因</th></tr>' + rows1 + '</table>' : '沒有可疑的品項 👍', flagged.length + ' 張單');
@@ -517,11 +533,43 @@
     h += section('✅ 沒發現問題的訂單', '#2e7d4f', okO.length ? okO.map(function (o) {
       return '<label style="display:inline-block;margin:2px 12px 2px 0;cursor:pointer">' +
         (canDv(o) ? '<input type="checkbox" class="mk-mc-dv" value="' + esc(o.id) + '"> ' : '') +
-        esc(o.customer) + ' ' + oLink(o) + ' <span class="mk-mc-dvst" data-id="' + esc(o.id) + '" style="color:#888;font-size:12px">' + (o.status !== '已接單' ? esc(o.status) : '') + '</span></label>';
+        esc(o.customer) + ' ' + oLink(o) + ' <span class="mk-mc-dvst" data-id="' + esc(o.id) + '" style="color:#888;font-size:12px">' + (o.status !== '已接單' ? esc(o.status) : '') + '</span></label>' +
+        '<a href="#" class="mk-miss" data-id="' + esc(o.id) + '" style="font-size:11px;color:#999;margin:0 14px 0 -8px">回報漏抓</a>';
     }).join('') +
+      '<div style="color:#666;font-size:12px;margin-top:4px">會計自己發現工具沒抓到的錯（重量、數量、單位），按該訂單旁的「回報漏抓」，寫下商品和問題，之後會用來加新規則。</div>' +
       (dvN ? '<div style="margin-top:8px;display:flex;gap:10px;align-items:center"><a href="#" id="mk-mc-dvall" style="color:#2e7d4f;font-size:13px">全選（' + dvN + ' 張）</a><button id="mk-mc-dvgo" style="padding:8px 16px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">把勾選的 0 張改成「已送達」</button><span id="mk-mc-dvmsg" style="font-size:13px"></span></div>' +
         '<div style="color:#666;font-size:12px;margin-top:4px">有問題的訂單（上面紅色、橘色）不在這裡，處理好後重新按一次「會計早上核對」。</div>' : '') : '沒有', okO.length + ' 張');
     $('mk-mc-body').innerHTML = '<style>.mk-mc-t th{background:#f5f5f5;text-align:left;padding:4px 6px;font-size:13px;position:sticky;top:0}.mk-mc-t td{border-top:1px solid #eee;padding:4px 6px;vertical-align:top;font-size:13px}</style>' + h;
+    // 回報按鈕：確認有錯／這是正常的（誤報會送學習清單）
+    [].forEach.call(document.querySelectorAll('.mk-fbb'), function (b) {
+      b.onclick = function () {
+        var wrap = b.closest('.mk-fb'), x = FB[+wrap.dataset.k], r = b.dataset.r;
+        var note = r === '正常（誤報）' ? (prompt('為什麼這是正常的？（可空白，例如：山東大白一顆本來就 4 公斤）', '') || '') : '';
+        if (note === null) return;
+        sendFeedback({ date: DATE, customer: x.o.customer, orderNo: x.o.no, product: x.it.name, unit: x.it.unit, code: x.f.code, text: x.f.t,
+          orig: x.it.pk && isFinite(x.it.pk.qty) ? x.it.pk.qty : '', cur: isFinite(x.it.qty) ? x.it.qty : '', result: r, note: note });
+        wrap.innerHTML = '<span style="color:#1b5e20;font-size:12px">✓ 已回報：' + esc(r) + (r === '正常（誤報）' ? '（已送學習清單，主任核准後不再提醒）' : '') + '</span>';
+      };
+    });
+    // 回報漏抓：工具沒抓到、會計自己發現的錯
+    [].forEach.call(document.querySelectorAll('.mk-miss'), function (a) {
+      a.onclick = function (e) {
+        e.preventDefault();
+        var o = R.orders.filter(function (x) { return x.id === a.dataset.id; })[0];
+        if (!o) return;
+        var names = (o.items || []).map(function (it) { return it.name; });
+        var prod = prompt('哪個商品有問題？\n（這張單的商品：' + names.slice(0, 15).join('、') + (names.length > 15 ? '…' : '') + '）', '');
+        if (!prod) return;
+        prod = prod.trim();
+        var it = (o.items || []).filter(function (x) { return x.name === prod; })[0] || (o.items || []).filter(function (x) { return x.name.indexOf(prod) >= 0; })[0];
+        var what = prompt('問題是什麼？（例如：訂 1 台斤給了 1 公斤、放山雞沒秤、數量打錯）', '');
+        if (!what) return;
+        sendFeedback({ date: DATE, customer: o.customer, orderNo: o.no, product: it ? it.name : prod, unit: it ? it.unit : '', code: 'missed', text: '',
+          orig: it && it.pk && isFinite(it.pk.qty) ? it.pk.qty : '', cur: it && isFinite(it.qty) ? it.qty : '', result: '工具漏抓', note: what });
+        a.textContent = '✓ 已回報';
+        a.style.color = '#1b5e20';
+      };
+    });
     var keyOk = $('mk-mc-keyok');
     if (keyOk) keyOk.onclick = function () {
       var k = ($('mk-mc-key').value || '').trim();
