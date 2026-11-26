@@ -338,12 +338,15 @@
       if (isW || byPiece) {
         if (isW && ((ratio >= 0.55 && ratio <= 0.65) || (ratio >= 1.55 && ratio <= 1.75)))
           flags.push({ code: 'unit-06', lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（剛好差 0.6 倍，可能台斤／公斤搞混）' });
-        else if (ratio > 5)
+        // 「太誇張」「差很多」只比重量單位（台斤、公斤…）。按顆／條／隻賣但秤重計價的
+        // （例：山東大白 粒|秤重台斤計價 10 粒 → 69.57 台斤），訂的是顆數、回填的是重量，
+        // 兩個數字不能直接比，改看下面「一個多重」。（2026-11-26，跟理貨 App 一起改）
+        else if (isW && ratio > 5)
           flags.push({ code: 'too-much', lv: 2, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（太誇張）' });
         else if (isW && (ratio > 1.5 || ratio < 0.6))
           flags.push({ code: 'far', lv: 1, t: '原訂 ' + fmt(orig) + ' → ' + fmt(cur) + '（差很多，請確認）' });
-        if (byPiece) { // 一個多重：有實秤公斤就用實秤，沒有就用台斤換算
-          var each = (isFinite(kg) ? kg : cur * 0.6) / orig;
+        if (byPiece) { // 一個多重：有實秤公斤就用實秤，沒有就用回填數字換算（台斤計價 ×0.6；公斤計價不換）
+          var each = (isFinite(kg) ? kg : cur * (/公斤計價/.test(it.unit) ? 1 : 0.6)) / orig;
           if (each > 15 || each < 0.05) flags.push({ code: 'each-weird', lv: 2, t: '一個約 ' + fmt(each) + ' 公斤（不合理，可能打錯）' });
         }
       } else if (ratio > 3) {

@@ -42,7 +42,7 @@
 
 ## 會計早上核對（morning.js，2026-11-24 第一階段）
 - 第一階段只檢查不改資料。「一鍵已送達」2026-11-24 晚上上線但還沒實測：訂單詳情頁按「開始配送」再按「已送達」（後台不能跳過配送中），預設都不勾、按鈕要按兩次。之後要加：面板填實價品重量／價格、運費改 0、指定客戶「正本」列印（一張訂單一張、預算制不印價、藍色正本章，名單放在常態 OK 清單試算表的新分頁）。
-- **重量檢查跟「理貨作業 Web App」同一套**（2026-11-25 對齊）：異常代碼 zero、same-as-qty、same-as-estimate、unit-06、too-much、far、each-weird、count-over 和門檻兩邊一致（morning.js checkItem ↔ 理貨 App checkRow），改規則要兩邊一起改。早上多一條 backfill-diff（後台 vs 理貨表格回填）。資料來源都是理貨表格。
+- **重量檢查跟「理貨作業 Web App」同一套**（2026-11-25 對齊）：異常代碼 zero、same-as-qty、same-as-estimate、unit-06、too-much、far、each-weird、count-over 和門檻兩邊一致（morning.js checkItem ↔ 理貨 App checkRow），改規則要兩邊一起改。too-much 只比重量單位（2026-11-26：按顆／條／隻但秤重計價的，例如「山東大白 粒|秤重台斤計價」，訂的是顆數、填的是重量，不能比倍數，只看 each-weird 一個多重）。早上多一條 backfill-diff（後台 vs 理貨表格回填）。資料來源都是理貨表格。
 - 「數量異常學習清單」＝常態 OK 清單試算表的分頁（理貨 App 寫入）；morning.js 讀 OK 網路程式 `?action=learned`（2026-11-25 已部署第 2 版）。商品＋代碼 待審核／核准 → 不再提醒。
 - 「異常紀錄」＝常態 OK 清單試算表分頁：morning.js 每次核對完 POST `{action:'log', rows}`（no-cors），ok-list.gs 寫入並去重（同日＋訂單＋商品＋代碼）。「處理結果」欄給人填，累積後做分析（哪些商品／客戶常出錯、哪些是誤報）。
 - 會計回報（2026-11-26，OK 網路程式第 3 版）：核對畫面每筆異常有「✓ 確認有錯」「✗ 這是正常的」、每張單有「回報漏抓」→ POST `{action:'feedback', result}`：填異常紀錄的處理結果；誤報另送數量異常學習清單（待審核）；漏抓新增一列（代碼 missed、來源 會計回報）。試算表會把 yyyy-MM-dd 自動轉成日期，比對一律用 dkey_()。
