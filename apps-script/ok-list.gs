@@ -74,7 +74,44 @@ function doGet(e) {
 function doPost(e) {
   var p = {};
   try { p = JSON.parse(e.postData.contents); } catch (err) { p = (e && e.parameter) || {}; }
+  if (p.action === 'log') return out_(logAnomalies_(p.rows));
   return out_(submit_(p));
+}
+
+// 異常紀錄：會計早上核對（之後理貨 App 也可以）把每天抓到的數量／重量異常記下來，累積起來做分析
+// POST {action:'log', rows:[{date, customer, orderNo, product, unit, code, text, orig, cur, kg, source}]}
+// 同一天＋同訂單＋同商品＋同代碼只記一次。「處理結果」欄留給人填（例如：確認正常、已改、誤報）。
+var LOG_SHEET = '異常紀錄';
+var LOG_HEAD = ['記錄時間', '到貨日', '客戶', '訂單編號', '商品', '單位', '異常代碼', '異常說明', '原訂', '現在', '實秤公斤', '來源', '處理結果'];
+function logSheet_() {
+  var ss = SpreadsheetApp.getActive(), s = ss.getSheetByName(LOG_SHEET);
+  if (s) return s;
+  s = ss.insertSheet(LOG_SHEET);
+  s.getRange(1, 1, 1, LOG_HEAD.length).setValues([LOG_HEAD]).setFontWeight('bold').setBackground('#dfeedd');
+  s.setFrozenRows(1);
+  [140, 90, 160, 110, 160, 80, 110, 300, 60, 60, 70, 90, 120].forEach(function (w, i) { s.setColumnWidth(i + 1, w); });
+  return s;
+}
+function logAnomalies_(rows) {
+  if (!rows || !rows.length) return { ok: true, added: 0 };
+  if (rows.length > 500) rows = rows.slice(0, 500);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var s = logSheet_(), n = s.getLastRow(), seen = {};
+    if (n >= 2) s.getRange(2, 2, n - 1, 6).getValues().forEach(function (r) { seen[[r[0], r[2], r[3], r[5]].join('|')] = 1; });
+    var now = new Date(), add = [];
+    rows.forEach(function (x) {
+      var key = [String(x.date || ''), String(x.orderNo || ''), String(x.product || ''), String(x.code || '')].join('|');
+      if (seen[key]) return;
+      seen[key] = 1;
+      add.push([now, safe_(x.date), safe_(x.customer), safe_(x.orderNo), safe_(x.product), safe_(x.unit), safe_(x.code), safe_(x.text),
+        x.orig === '' || x.orig == null ? '' : Number(x.orig), x.cur === '' || x.cur == null ? '' : Number(x.cur),
+        x.kg === '' || x.kg == null ? '' : Number(x.kg), safe_(x.source || '早上核對'), '']);
+    });
+    if (add.length) s.getRange(s.getLastRow() + 1, 1, add.length, LOG_HEAD.length).setValues(add);
+    return { ok: true, added: add.length };
+  } finally { lock.releaseLock(); }
 }
 
 function norm_(s) {
