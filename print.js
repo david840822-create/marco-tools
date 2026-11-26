@@ -356,7 +356,13 @@
   panel.querySelector('#mk-x').onclick = function () { panel.remove(); };
   var body = panel.querySelector('#mk-body');
   var statusEl = panel.querySelector('#mk-status');
-  function status(s) { statusEl.textContent = s; }
+  function status(s) {
+    statusEl.textContent = s;
+    var bad = /^⚠⚠/.test(s); // 車次沒分完：整段紅色粗體
+    statusEl.style.color = bad ? '#b71c1c' : '#555';
+    statusEl.style.fontWeight = bad ? '700' : '';
+    statusEl.style.fontSize = bad ? '14px' : '13px';
+  }
 
   var batches = readBatchList(document);
   if (!batches.length) {
@@ -486,6 +492,7 @@
       prog(b, '分配車次中（' + r.alloc.done + '/' + r.alloc.total + ' 已分配）…');
       var a = await allocRun(b);
       res.allocLog = a.log;
+      res.allocMissed = a.missed;
       if (a.changed) { prog(b, '重新讀取車次…'); r = await readBatch(b, opts.skipCancel); }
     }
     var orders = r.orders;
@@ -572,9 +579,10 @@
       this.disabled = false; this.style.opacity = 1;
       return;
     }
-    var cssText = null, wrapperChain = null, sections = [], warns = [], allocNotes = [];
+    var cssText = null, wrapperChain = null, sections = [], warns = [], allocNotes = [], missedNotes = [];
     results.forEach(function (r) {
       if (r.allocLog && r.allocLog.length) allocNotes.push(r.b.no + '：' + r.allocLog.join('；'));
+      if (r.allocMissed && r.allocMissed.length) missedNotes.push('批次 ' + r.b.no + ' 有 ' + r.allocMissed.length + ' 張沒分到車次：' + r.allocMissed.map(function (x) { return x.route + ' ' + x.name; }).join('、'));
       warns = warns.concat(r.warns || []);
       if (cssText === null && r.css !== null && r.chain) { cssText = r.css; wrapperChain = r.chain; }
       (r.secs || []).forEach(function (s) { s.seq = sections.length; sections.push(s); });
@@ -582,7 +590,11 @@
     if (cssText === null) cssText = '';
     cssText += '\n' + MK_CSS;
 
-    if (!sections.length) { status('沒有可列印的訂單。\n' + warns.join('\n')); if (win) win.close(); this.disabled = false; this.style.opacity = 1; return; }
+    /* 有配送路線（n車）卻沒分到車次 → 大紅字，不能只是一行小字（2026-11-27：2車整批漏分沒人發現） */
+    var missedHtml = missedNotes.length ? '<div style="margin:0 0 8px;background:#fdecea;border:3px solid #c62828;color:#b71c1c;border-radius:8px;padding:10px 12px;font-size:17px;font-weight:700">⚠ 車次沒有分完！<div style="font-size:14px;font-weight:400;margin-top:4px">' + missedNotes.map(esc).join('<br>') + '<br>已經自動重試一次還是失敗，請到後台「車次分配」手動分好，再重新產生出貨單。</div></div>' : '';
+    var missedText = missedNotes.length ? '⚠⚠ 車次沒有分完！\n' + missedNotes.join('\n') + '\n請到後台「車次分配」手動分好，再重新產生出貨單。\n\n' : '';
+
+    if (!sections.length) { status(missedText + '沒有可列印的訂單。\n' + warns.join('\n')); if (win) win.close(); this.disabled = false; this.style.opacity = 1; return; }
 
     /* 3) 依車號排序：A 車 → B 車 …，沒有車次的排最後。
           同一台車裡，同一位客人（不同批次）的訂單排在一起，
@@ -634,7 +646,7 @@
       + '.mk-toolbar table{border-collapse:collapse;margin-top:8px;width:100%;font-size:13px}.mk-toolbar td{border-top:1px solid #dde;padding:2px 6px}'
       + '.mk-warn{color:#b00020;white-space:pre-line;margin-top:6px}@media print{.mk-toolbar{display:none!important}}</style>'
       + '</head><body class="' + esc((wrapperChain && wrapperChain.bodyCls) || '') + '">'
-      + '<div class="mk-toolbar"><button onclick="window.print()">列印</button>共 <b>' + nCust + '</b> 位客戶、<b>' + nOrders + '</b> 張訂單、<b>' + nPages + '</b> 頁，已依車號排序（同車同客人排在一起）：' + summary
+      + '<div class="mk-toolbar">' + missedHtml + '<button onclick="window.print()">列印</button>共 <b>' + nCust + '</b> 位客戶、<b>' + nOrders + '</b> 張訂單、<b>' + nPages + '</b> 頁，已依車號排序（同車同客人排在一起）：' + summary
       + (multi.length ? '<div style="margin-top:4px">品項較多、印成多頁的：' + multi.map(function (s) { return esc(s.k.label + ' ' + s.o.name) + '（' + s.pages + ' 頁）'; }).join('、') + '，每頁都有抬頭和「第 X/Y 頁」。</div>' : '')
       + (noPriceNames.length ? '<div style="margin-top:4px">預算制、<b>不印價格</b>的：' + esc(noPriceNames.join('、')) + '</div>' : '')
       + (allocNotes.length ? '<div style="margin-top:4px;color:#8a5a00">自動分配車次：' + esc(allocNotes.join('　')) + '</div>' : '')
@@ -646,7 +658,7 @@
 
     if (win && !win.closed) {
       win.document.open(); win.document.write(out); win.document.close();
-      status('完成！共 ' + nCust + ' 位客戶、' + nOrders + ' 張訂單、' + nPages + ' 頁，已在新分頁開啟（用時 ' + Math.round((Date.now() - T0) / 1000) + ' 秒）。' + (allocNotes.length ? '\n自動分配車次：' + allocNotes.join('；') : '') + (warns.length ? '\n⚠ ' + warns.join('\n⚠ ') : ''));
+      status(missedText + '完成！共 ' + nCust + ' 位客戶、' + nOrders + ' 張訂單、' + nPages + ' 頁，已在新分頁開啟（用時 ' + Math.round((Date.now() - T0) / 1000) + ' 秒）。' + (allocNotes.length ? '\n自動分配車次：' + allocNotes.join('；') : '') + (warns.length ? '\n⚠ ' + warns.join('\n⚠ ') : ''));
     } else {
       status('瀏覽器擋住了新分頁，改在目前頁面顯示（列印完按「上一頁」回後台）。');
       document.open(); document.write(out); document.close();
@@ -724,8 +736,35 @@
     return r;
   }
 
-  async function allocRun(b) {
-    var log = [], changed = false;
+  /* 分配車次：跑一次；還有「有配送路線卻沒分到」的單（或中途出錯）→ 重新開分配頁面再跑一次。
+   * 兩次都沒分完的，回傳 missed，產生出貨單時用大紅字提醒（2026-11-27：兩個批次的 2車 整批漏分、只有一行小字沒人看到）。 */
+  /* 好幾個批次一起印時，分配車次一次只做一個批次（同時開好幾個分配頁面比較容易出錯） */
+  var allocQueue = Promise.resolve();
+  function allocRun(b) {
+    var p = allocQueue.then(function () { return allocRunOne(b); });
+    allocQueue = p.catch(function () {});
+    return p;
+  }
+  async function allocRunOne(b) {
+    var log = [], changed = false, last = null;
+    for (var tryNo = 1; tryNo <= 2; tryNo++) {
+      var r;
+      try { r = await allocOnce(b); }
+      catch (e) { r = { log: ['⚠ 分配車次出錯：' + (e && e.message || e)], changed: false, left: null }; }
+      if (tryNo === 2) r.log = r.log.map(function (s) { return '重試：' + s; });
+      log = log.concat(r.log);
+      changed = changed || r.changed;
+      last = r;
+      var routed = r.left && r.left.filter(function (x) { return x.n >= 1; });
+      if (routed && !routed.length) break;
+      if (tryNo === 1) await sleep(1500);
+    }
+    var missed = last.left ? last.left.filter(function (x) { return x.n >= 1; }) : [{ route: '?', name: '分配頁面讀不到，請到後台確認' }];
+    return { log: log, changed: changed, missed: missed.map(function (x) { return { route: x.route, name: x.name }; }) };
+  }
+
+  async function allocOnce(b) {
+    var log = [], changed = false, left = null;
     var f = await loadFrame(ORIGIN + '/delivery-batch/edit/' + b.id + '?pageType=vehicle', function (d) { return readVehicles(d) ? 1 : 0; }, 40000);
     var doc = f.frame.contentDocument;
     try {
@@ -788,11 +827,12 @@
         else log.push('⚠ ' + n + '車→' + L + ' 分配後沒看到更新，請到後台確認');
         await waitFor(stable(function () { return readUnalloc(doc); }, 2), 5000);
       }
-      var left = (readUnalloc(doc) || []).filter(function (r) { return !r.cb.disabled; });
-      if (left.length) log.push('⚠ 還有 ' + left.length + ' 筆沒分配（配送路線：' + left.map(function (r) { return r.route; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join('、') + '），請手動分配');
+      await waitFor(stable(function () { return readUnalloc(doc); }, 3), 6000);
+      left = (readUnalloc(doc) || []).filter(function (r) { return !r.cb.disabled; });
+      if (left.length) log.push('還有 ' + left.length + ' 筆沒分配（配送路線：' + left.map(function (r) { return r.route; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join('、') + '）');
     } finally {
       f.frame.remove();
     }
-    return { log: log, changed: changed };
+    return { log: log, changed: changed, left: left };
   }
 })();
