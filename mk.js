@@ -21,6 +21,7 @@
     { icon: '📋', name: '檢查待接單', desc: '檢查明天的待審核訂單有沒有備註，再一次接單', file: 'accept.js' },
     { icon: '💲', name: '更新批次價格', desc: '建好批次後按：用今天的價格檔一鍵更新價格（17:00 後）', file: 'price.js' },
     { icon: '🖨️', name: '產生出貨單', desc: '先自動分配車次，再依車號排序列印出貨明細', file: 'print.js' },
+    { icon: '🔄', name: '自動匯入理貨結果', desc: '辦公室電腦開著：理貨裝箱按「全部確認回傳」後，自動匯入馬可（這個分頁要一直開著）', file: 'tally-import.js' },
     { icon: '☀️', name: '會計早上核對', desc: '今天到貨的訂單：重量、實價品、運費一次檢查；沒問題的可勾選改成已送達', file: 'morning.js' },
     { icon: '📝', name: '常態 OK 清單', desc: '打開 Google 試算表（主管在這裡審核）', url: SHEET_URL }
   ];
