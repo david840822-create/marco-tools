@@ -363,6 +363,26 @@
     } catch (e) { return {}; }
   }
 
+  /* 異常紀錄：每次核對完，把抓到的重量／數量異常送到常態 OK 清單試算表的「異常紀錄」分頁，累積起來做分析。
+   * 同一天＋同訂單＋同商品＋同代碼只記一次（網路程式那邊去重），所以重跑核對不會重複記。 */
+  function logAnomalies(orders) {
+    var rows = [];
+    orders.forEach(function (o) {
+      (o.items || []).forEach(function (it) {
+        (it.flags || []).forEach(function (f) {
+          if (!f.code) return;
+          rows.push({ date: DATE, customer: o.customer, orderNo: o.no, product: it.name, unit: it.unit, code: f.code, text: f.t,
+            orig: it.pk && isFinite(it.pk.qty) ? it.pk.qty : '', cur: isFinite(it.qty) ? it.qty : '',
+            kg: it.pk && isFinite(it.pk.kg) ? it.pk.kg : '', source: '早上核對' });
+        });
+      });
+    });
+    if (!rows.length) return;
+    fetch(OK_API, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action: 'log', rows: rows }) })
+      .then(function () { var el = $('mk-mc-status'); if (el) el.textContent += '　（' + rows.length + ' 筆異常已記錄到「異常紀錄」）'; })
+      .catch(function () { var el = $('mk-mc-status'); if (el) el.textContent += '　（異常紀錄沒送出）'; });
+  }
+
   /* ---------- 主流程 ---------- */
   var R = null;
   async function run() {
@@ -421,6 +441,7 @@
       R = { orders: orders, freight: freight, pk: pk, fr: fr, skippedByLearn: skippedByLearn, learnedN: Object.keys(learned).length, secs: Math.round((Date.now() - T0) / 1000) };
       window.__MK_MC_R = R; // 給維護者除錯用
       render();
+      logAnomalies(orders);
     } catch (e) {
       status('發生錯誤：' + e.message);
       console.error(e);
