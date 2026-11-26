@@ -75,6 +75,7 @@ function doPost(e) {
   var p = {};
   try { p = JSON.parse(e.postData.contents); } catch (err) { p = (e && e.parameter) || {}; }
   if (p.action === 'log') return out_(logAnomalies_(p.rows));
+  if (p.action === 'feedback') return out_(feedback_(p));
   return out_(submit_(p));
 }
 
@@ -92,6 +93,11 @@ function logSheet_() {
   [140, 90, 160, 110, 160, 80, 110, 300, 60, 60, 70, 90, 120].forEach(function (w, i) { s.setColumnWidth(i + 1, w); });
   return s;
 }
+// 試算表會把「2026-11-26」自動變成日期：比對前一律轉回 yyyy-MM-dd 文字
+function dkey_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
+  return String(v == null ? '' : v).trim();
+}
 function logAnomalies_(rows) {
   if (!rows || !rows.length) return { ok: true, added: 0 };
   if (rows.length > 500) rows = rows.slice(0, 500);
@@ -99,7 +105,7 @@ function logAnomalies_(rows) {
   lock.waitLock(10000);
   try {
     var s = logSheet_(), n = s.getLastRow(), seen = {};
-    if (n >= 2) s.getRange(2, 2, n - 1, 6).getValues().forEach(function (r) { seen[[r[0], r[2], r[3], r[5]].join('|')] = 1; });
+    if (n >= 2) s.getRange(2, 2, n - 1, 6).getValues().forEach(function (r) { seen[[dkey_(r[0]), String(r[2]), String(r[3]), String(r[5])].join('|')] = 1; });
     var now = new Date(), add = [];
     rows.forEach(function (x) {
       var key = [String(x.date || ''), String(x.orderNo || ''), String(x.product || ''), String(x.code || '')].join('|');
@@ -111,6 +117,58 @@ function logAnomalies_(rows) {
     });
     if (add.length) s.getRange(s.getLastRow() + 1, 1, add.length, LOG_HEAD.length).setValues(add);
     return { ok: true, added: add.length };
+  } finally { lock.releaseLock(); }
+}
+
+// 會計回報（核對畫面的按鈕）：
+//   result = '確認有錯' / '正常（誤報）'：把「異常紀錄」那一列的「處理結果」填上；誤報另外送「數量異常學習清單」（待審核，主管核准後兩邊都不再提醒）
+//   result = '工具漏抓'：在「異常紀錄」新增一列（來源＝會計回報），之後分析用來加新規則
+// POST {action:'feedback', date, customer, orderNo, product, unit, code, text, orig, cur, result, note, who}
+var LEARN_HEAD = ['狀態', '商品', '異常代碼', '異常說明', '範例（訂購→輸入）', '客戶', '送審人', '送審時間', '審核時間', '說明', '來源'];
+function feedback_(p) {
+  var result = String(p.result || '').trim();
+  if (['確認有錯', '正常（誤報）', '工具漏抓'].indexOf(result) < 0) return { ok: false, msg: '回報種類不對' };
+  var product = String(p.product || '').trim(), code = String(p.code || '').trim();
+  if (!product || product.length > 100) return { ok: false, msg: '商品名稱不對' };
+  var note = String(p.note || '').trim().slice(0, 300), who = String(p.who || '會計').trim().slice(0, 30);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var s = logSheet_(), now = new Date(), n = s.getLastRow();
+    var resultText = result + (note ? '：' + note : '');
+    if (result === '工具漏抓') {
+      s.appendRow([now, safe_(p.date), safe_(p.customer), safe_(p.orderNo), safe_(product), safe_(p.unit), 'missed', safe_(note || '會計回報：工具沒抓到'),
+        p.orig === '' || p.orig == null ? '' : Number(p.orig), p.cur === '' || p.cur == null ? '' : Number(p.cur), '', '會計回報', resultText]);
+      return { ok: true, added: 1 };
+    }
+    // 找「異常紀錄」同一天＋訂單＋商品＋代碼那一列，填處理結果；找不到就新增一列
+    var row = 0;
+    if (n >= 2) {
+      var v = s.getRange(2, 2, n - 1, 6).getValues(); // 到貨日、客戶、訂單、商品、單位、代碼
+      for (var i = v.length - 1; i >= 0; i--) {
+        if (dkey_(v[i][0]) === String(p.date || '') && String(v[i][2]) === String(p.orderNo || '') && String(v[i][3]) === product && String(v[i][5]) === code) { row = i + 2; break; }
+      }
+    }
+    if (row) s.getRange(row, 13).setValue(resultText);
+    else s.appendRow([now, safe_(p.date), safe_(p.customer), safe_(p.orderNo), safe_(product), safe_(p.unit), safe_(code), safe_(p.text),
+      p.orig === '' || p.orig == null ? '' : Number(p.orig), p.cur === '' || p.cur == null ? '' : Number(p.cur), '', '早上核對', resultText]);
+    // 誤報 → 送學習清單（同商品＋代碼已經在清單裡就不重複送）
+    var learnAdded = false;
+    if (result === '正常（誤報）' && code) {
+      var ls = SpreadsheetApp.getActive().getSheetByName(LEARN_SHEET);
+      if (!ls) {
+        ls = SpreadsheetApp.getActive().insertSheet(LEARN_SHEET);
+        ls.getRange(1, 1, 1, LEARN_HEAD.length).setValues([LEARN_HEAD]).setFontWeight('bold').setBackground('#dfeedd');
+        ls.setFrozenRows(1);
+      }
+      var dup = learned_().some(function (x) { return x.product === product && x.code === code; });
+      if (!dup) {
+        ls.appendRow(['待審核', safe_(product), safe_(code), safe_(p.text), safe_((p.orig === '' ? '?' : p.orig) + '→' + (p.cur === '' ? '?' : p.cur)),
+          safe_(p.customer), safe_(who), now, '', safe_(note), '早上核對']);
+        learnAdded = true;
+      }
+    }
+    return { ok: true, updated: !!row, learnAdded: learnAdded };
   } finally { lock.releaseLock(); }
 }
 
