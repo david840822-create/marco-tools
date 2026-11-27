@@ -263,13 +263,28 @@
   function detailStatus(doc) {
     var t = doc.body.innerText, i = t.lastIndexOf('訂單詳情');
     if (i < 0 || t.indexOf('配送方式', i) < 0) return '';
-    return lines(t.slice(i, t.indexOf('配送方式', i))).find(function (s) { return STATUS_RE.test(s); }) || '';
+    // 配送中的頁面上方有一顆「已送達」按鈕，字跟狀態一樣 → 按鈕上的字不算，取客戶名稱下面那行
+    var btn = {};
+    [].forEach.call(doc.querySelectorAll('button'), function (b) { btn[b.innerText.replace(/\s+/g, '')] = 1; });
+    var ls = lines(t.slice(i, t.indexOf('配送方式', i))).filter(function (s) { return STATUS_RE.test(s); });
+    var real = ls.filter(function (s) { return !btn[s]; });
+    var pick = real.length ? real : ls;
+    return pick[pick.length - 1] || '';
   }
   var NEXT_BTN = { '已接單': /^開始配送$/, '揀貨完成': /^開始配送$/, '配送中': /^(已送達|完成配送|確認送達|送達完成)$/ };
+  function btnIn(root, t) { return [].find.call(root.querySelectorAll('button'), function (x) { return x.innerText.replace(/\s+/g, '') === t && !x.disabled; }); }
+  // 附屬品沒人在看（使用者 2026-11-27 定）→ 直接把「訂單附屬品」開關關掉，不選品項
+  async function fillAccessory(d, dr) {
+    var sw = dr.querySelector('input[type=checkbox]');
+    if (!sw) return { ok: false, msg: '找不到附屬品開關' };
+    if (sw.checked) sw.click();
+    var off = await waitFor(function () { var x = dr.querySelector('input[type=checkbox]'); return x && !x.checked; }, 3000, 150);
+    return off ? { ok: true } : { ok: false, msg: '附屬品開關關不掉' };
+  }
   async function deliverOne(o) {
     var f = openFrame('/order/detail/' + o.id);
     try {
-      for (var step = 0; step < 3; step++) {
+      for (var step = 0; step < 5; step++) {
         var st = await waitFor(function () { return detailStatus(f.contentDocument); }, 30000, 300);
         if (!st) return { ok: false, msg: '讀不到訂單狀態' };
         if (st === '已送達') return { ok: true, msg: '✓ 已送達' };
@@ -279,17 +294,46 @@
         var b = [].find.call(d.querySelectorAll('button'), function (x) { return re.test(x.innerText.replace(/\s+/g, '')) && !x.disabled; });
         if (!b) return { ok: false, msg: '找不到「' + (st === '配送中' ? '已送達' : '開始配送') + '」按鈕' };
         b.click();
-        // 有確認視窗就按確定（視窗裡不能有「取消訂單」）
-        var dlgBtn = await waitFor(function () {
-          var dlg = [].find.call(d.querySelectorAll('[role=dialog]'), function (x) { return x.innerText.trim(); });
-          if (!dlg || /取消訂單|取消此訂單/.test(dlg.innerText)) return null;
-          return [].find.call(dlg.querySelectorAll('button'), function (x) { return /^(確定|確認|是|送出|確定送達)$/.test(x.innerText.replace(/\s+/g, '')); });
-        }, 2500, 200);
+        if (st === '配送中') {
+          // 按「已送達」會從右邊滑出「核對訂單附屬品」：把附屬品開關關掉，再按「確認已送達」
+          // 頁面剛出來時按「已送達」後台不會反應 → 3 秒沒出現就再按，最多 5 次
+          var dr = null;
+          for (var tryN = 0; tryN < 5 && !dr; tryN++) {
+            if (tryN) { var b2 = btnIn(d, '已送達'); if (!b2) break; b2.click(); }
+            dr = await waitFor(function () {
+              return [].find.call(d.querySelectorAll('.MuiDrawer-modal,[role=presentation]'), function (x) { return /核對訂單附屬品/.test(x.innerText) && btnIn(x, '確認已送達'); });
+            }, 3000, 200);
+          }
+          if (!dr) return { ok: false, msg: '按了「已送達」但沒出現「核對訂單附屬品」，請手動確認' };
+          var acc = await fillAccessory(d, dr);
+          if (!acc.ok) { var back = btnIn(dr, '返回'); if (back) back.click(); return { ok: false, msg: acc.msg }; }
+          btnIn(dr, '確認已送達').click();
+          // 接著跳「確認訂單已送達？」→ 按「確定」
+          var ok2 = await waitFor(function () {
+            var g = [].find.call(d.querySelectorAll('[role=dialog]'), function (x) { return /確認訂單已送達/.test(x.innerText); });
+            return g && !/取消訂單|取消此訂單/.test(g.innerText) ? btnIn(g, '確定') : null;
+          }, 6000, 200);
+          if (!ok2) return { ok: false, msg: '沒出現「確認訂單已送達？」視窗，請手動確認' };
+          ok2.click();
+          var changed2 = await waitFor(function () { var s2 = detailStatus(f.contentDocument); return s2 && s2 !== st ? s2 : null; }, 15000, 300);
+          if (!changed2) { f.contentWindow.location.reload(); await sleep(1500); }
+          continue;
+        }
+        // 會跳「訂單開始配送？」→ 按確定（視窗裡不能有「取消訂單」）；3 秒沒跳就再按一次，最多 5 次
+        var dlgBtn = null;
+        for (var tryM = 0; tryM < 5 && !dlgBtn; tryM++) {
+          if (tryM) { var b3 = [].find.call(d.querySelectorAll('button'), function (x) { return re.test(x.innerText.replace(/\s+/g, '')) && !x.disabled; }); if (!b3) break; b3.click(); }
+          dlgBtn = await waitFor(function () {
+            var dlg = [].find.call(d.querySelectorAll('[role=dialog]'), function (x) { return x.innerText.trim(); });
+            if (!dlg || /取消訂單|取消此訂單/.test(dlg.innerText)) return null;
+            return [].find.call(dlg.querySelectorAll('button'), function (x) { return /^(確定|確認|是|送出|確定送達)$/.test(x.innerText.replace(/\s+/g, '')); });
+          }, 3000, 200);
+        }
         if (dlgBtn) dlgBtn.click();
         var changed = await waitFor(function () { var s2 = detailStatus(f.contentDocument); return s2 && s2 !== st ? s2 : null; }, 15000, 300);
         if (!changed) { f.contentWindow.location.reload(); await sleep(1500); }
       }
-      return { ok: false, msg: '改了三次還不是已送達，請手動確認' };
+      return { ok: false, msg: '試了好幾次還不是已送達，請手動確認' };
     } catch (e) { return { ok: false, msg: '錯誤：' + e.message }; }
     finally { f.remove(); }
   }
