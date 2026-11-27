@@ -188,6 +188,17 @@
     }
     return { items: items, batchOf: batchOf };
   }
+  /* 後台手動建立、沒有放進出貨批次的單：改從訂單詳情頁讀品項（goods[].itemId 跟批次匯出 B 欄同一個號碼） */
+  async function readDetailItems(id) {
+    var f = openFrame('/order/detail/' + id);
+    try {
+      var gs = await waitFor(function () { return /實際應付/.test(f.contentDocument.body.innerText) && orderGoods(f.contentDocument); }, 30000, 300);
+      if (!gs) return null;
+      return gs.map(function (g) {
+        return { itemId: String(g.itemId), name: String(g.goodsName || g.name || '').trim(), unit: String(g.unitName || ''), excl: '', note: g.remark || '', qty: num(g.quantity), price: num(g.price) / 100 };
+      });
+    } finally { f.remove(); }
+  }
 
   /* ---------- 3. 理貨表格回填值 ---------- */
   async function readPicking() {
@@ -280,6 +291,75 @@
     if (sw.checked) sw.click();
     var off = await waitFor(function () { var x = dr.querySelector('input[type=checkbox]'); return x && !x.checked; }, 3000, 150);
     return off ? { ok: true } : { ok: false, msg: '附屬品開關關不掉' };
+  }
+  /* ---------- 會計在面板上直接改數量：訂單詳情「商品明細 → 編輯」改「調整後數量」→「儲存」 ----------
+   * 用 itemId（批次匯出 B 欄＝訂單頁 goods[].itemId）對到那一列；只改數量欄，其他不動。 */
+  function orderGoods(doc) {
+    var ps = doc.querySelectorAll('p,span'), seen = 0;
+    for (var i = 0; i < ps.length && seen < 400; i++, seen++) {
+      var k = Object.keys(ps[i]).find(function (x) { return x.indexOf('__reactFiber') === 0; });
+      var f = k && ps[i][k];
+      for (var j = 0; j < 30 && f; j++) {
+        var pr = f.memoizedProps || {};
+        if (Array.isArray(pr.goods) && pr.goods.length && pr.goods[0] && 'itemId' in pr.goods[0]) return pr.goods;
+        f = f.return;
+      }
+    }
+    return null;
+  }
+  function setInput(win, inp, v) {
+    var setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value').set;
+    setter.call(inp, String(v));
+    inp.dispatchEvent(new win.Event('input', { bubbles: true }));
+    inp.dispatchEvent(new win.Event('change', { bubbles: true }));
+    inp.dispatchEvent(new win.Event('blur', { bubbles: true }));
+  }
+  async function editQty(orderId, itemId, newQty) {
+    var f = openFrame('/order/detail/' + orderId);
+    try {
+      var goods = await waitFor(function () { return /實際應付/.test(f.contentDocument.body.innerText) && orderGoods(f.contentDocument); }, 30000, 300);
+      if (!goods) return { ok: false, msg: '讀不到訂單品項' };
+      var idx = goods.findIndex(function (g) { return String(g.itemId) === String(itemId); });
+      if (idx < 0) return { ok: false, msg: '訂單裡找不到這個品項' };
+      var d = f.contentDocument, w = f.contentWindow;
+      // 按「商品明細」旁邊的「編輯」（頁面剛出來時按了可能沒反應 → 沒進編輯就再按）
+      var rem = null;
+      for (var t = 0; t < 5 && !rem; t++) {
+        var eb = [].find.call(d.querySelectorAll('button'), function (b) { return b.innerText.replace(/\s+/g, '') === '編輯'; });
+        if (!eb) return { ok: false, msg: '找不到「編輯」按鈕（訂單可能已經不能改）' };
+        eb.click();
+        rem = await waitFor(function () { return d.querySelector('input[name="goods.' + idx + '.remark"]'); }, 3000, 200);
+      }
+      if (!rem) return { ok: false, msg: '按了「編輯」沒有進入編輯模式' };
+      var tr = rem.closest('tr');
+      var ins = [].filter.call(tr.querySelectorAll('input'), function (i) { return i.type === 'text' && !i.name; });
+      if (ins.length !== 2) return { ok: false, msg: '編輯畫面跟預期不一樣（找不到數量欄）' };
+      var qIn = ins[1];
+      if (Number(qIn.value) !== Number(goods[idx].quantity)) return { ok: false, msg: '數量欄對不上（' + qIn.value + '）' };
+      setInput(w, qIn, newQty);
+      await sleep(300);
+      if (Number(qIn.value) !== Number(newQty)) return { ok: false, msg: '數量填不進去' };
+      var saves = [].filter.call(d.querySelectorAll('button'), function (b) { return b.innerText.replace(/\s+/g, '') === '儲存' && !b.disabled; });
+      if (!saves.length) return { ok: false, msg: '找不到「儲存」' };
+      saves[saves.length - 1].click();
+      // 有確認視窗就按確定（視窗裡不能有「取消訂單」）
+      var dlg = await waitFor(function () {
+        var g = [].find.call(d.querySelectorAll('[role=dialog]'), function (x) { return x.innerText.trim(); });
+        if (!g || /取消訂單|取消此訂單|將不儲存/.test(g.innerText)) return null;
+        return [].find.call(g.querySelectorAll('button'), function (x) { return /^(確定|確認|儲存)$/.test(x.innerText.replace(/\s+/g, '')); });
+      }, 2500, 200);
+      if (dlg) dlg.click();
+      // 等離開編輯模式，再重新讀一次確認數量
+      var done = await waitFor(function () { return !d.querySelector('input[name="goods.0.remark"]'); }, 15000, 300);
+      if (!done) return { ok: false, msg: '按了儲存但沒有存起來，請到訂單頁確認' };
+      w.location.reload();
+      await sleep(1500);
+      var g2 = await waitFor(function () { return /實際應付/.test(f.contentDocument.body.innerText) && orderGoods(f.contentDocument); }, 30000, 300);
+      var now = g2 && g2.find(function (g) { return String(g.itemId) === String(itemId); });
+      if (!now || Number(now.quantity) !== Number(newQty)) return { ok: false, msg: '存完再看數量是 ' + (now ? Number(now.quantity) : '?') + '，請到訂單頁確認' };
+      return { ok: true, msg: '已改成 ' + Number(now.quantity) };
+    } catch (e) { return { ok: false, msg: '錯誤：' + e.message }; }
+    finally { f.remove(); }
   }
   async function deliverOne(o) {
     var f = openFrame('/order/detail/' + o.id);
@@ -450,6 +530,13 @@
       var T = await priceTools();
       var pkP = readPicking(), frP = readFreight(), lnP = readLearned();
       var bi = await readBatchItems(T, DATE, orders.map(function (o) { return o.id; }));
+      var noBatch = orders.filter(function (o) { return !bi.items[o.id]; });
+      if (noBatch.length) {
+        status('有 ' + noBatch.length + ' 張單沒有出貨批次，改從訂單頁讀品項…');
+        await pool(noBatch, 3, async function (o) {
+          try { var its = await readDetailItems(o.id); if (its && its.length) { bi.items[o.id] = its; o.noBatch = true; } } catch (e) {}
+        });
+      }
       status('讀理貨表格、運費群組…');
       var pk = await pkP, fr = await frP, learned = await lnP, skippedByLearn = 0;
       var pmap = pk.map || {};
@@ -457,7 +544,7 @@
         o.items = bi.items[o.id] || null;
         o.batch = bi.batchOf[o.id] || '';
         o.flags = []; o.zero = [];
-        if (!o.items) { o.flags.push({ lv: 2, t: '找不到這張單的品項（沒有建出貨批次？）' }); return; }
+        if (!o.items) { o.flags.push({ lv: 2, t: '讀不到這張單的品項（批次和訂單頁都讀不到），請手動確認' }); return; }
         o.goods = 0;
         o.items.forEach(function (it) {
           var p = pmap[it.itemId];
@@ -510,7 +597,8 @@
       '<div style="background:' + color + ';color:#fff;padding:6px 10px;font-weight:700">' + title + (count != null ? '（' + count + '）' : '') + '</div>' +
       '<div style="padding:8px 10px">' + inner + '</div></div>';
   }
-  function oLink(o) { return '<a href="/order/detail/' + esc(o.id) + '" target="_blank" style="color:#1565c0">' + esc(o.no) + '</a>'; }
+  function oLink(o) { return '<a href="/order/detail/' + esc(o.id) + '" target="_blank" style="color:#1565c0">' + esc(o.no) + '</a>' + (o.noBatch ? '<span title="後台手動建立、沒有出貨批次：品項從訂單頁讀，沒有理貨秤重資料" style="font-size:11px;color:#6a1b9a;margin-left:3px">(沒批次)</span>' : ''); }
+  function canDv(o) { return /^(已接單|揀貨完成|配送中)$/.test(o.status); }
   function render() {
     var os = R.orders;
     var flagged = os.filter(function (o) { return o.flags.length; });
@@ -518,7 +606,9 @@
     var frFix = R.freight.filter(function (f) { return Math.abs(f.cur - f.want) > 0.5; });
     var okO = os.filter(function (o) { return !o.flags.length && !o.zero.length; });
     var cnt = {}; os.forEach(function (o) { cnt[o.status] = (cnt[o.status] || 0) + 1; });
+    var nbN = os.filter(function (o) { return o.noBatch; }).length;
     status('今天到貨 ' + os.length + ' 張（' + Object.keys(cnt).map(function (k) { return k + ' ' + cnt[k]; }).join('、') + '），用時 ' + R.secs + ' 秒。' +
+      (nbN ? '　沒批次 ' + nbN + ' 張（品項從訂單頁讀，沒有秤重資料）' : '') +
       (R.pk.error ? '\n⚠ ' + R.pk.error : '　理貨表格 ' + R.pk.files.length + ' 份') +
       '　數量異常學習清單 ' + R.learnedN + ' 條' + (R.skippedByLearn ? '（略過 ' + R.skippedByLearn + ' 項）' : '') +
       '　運費群組：' + R.fr.groups.map(function (g) { return g.skipped ? g.name + '(略過)' : g.name + ' ' + g.n + ' 家'; }).join('、') + '、其他 ' + R.fr.def + ' 免運');
@@ -536,16 +626,21 @@
     // 1. 重量／數量可疑
     var rows1 = '';
     flagged.forEach(function (o) {
-      o.flags.forEach(function (f) {
-        if (!f.item) { rows1 += '<tr><td>' + esc(o.customer) + '</td><td>' + oLink(o) + '</td><td colspan="4" style="color:#b71c1c">' + esc(f.t) + '</td></tr>'; return; }
+      o.fbN = 0; o.fbDone = 0;
+      // 每張單第一列放「處理完可勾選送達」的位置：這張單的異常都回報完才出現勾選框
+      var slot = canDv(o) ? '<div class="mk-dvslot" data-id="' + esc(o.id) + '" style="font-size:12px"></div>' : '';
+      o.flags.forEach(function (f, fi) {
+        var lk = oLink(o) + (fi === 0 ? slot : '');
+        if (!f.item) { rows1 += '<tr><td>' + esc(o.customer) + '</td><td>' + lk + '</td><td colspan="4" style="color:#b71c1c">' + esc(f.t) + '</td></tr>'; return; }
         var it = f.item;
-        rows1 += '<tr><td>' + esc(o.customer) + '</td><td>' + oLink(o) + '</td><td>' + esc(it.name) + '</td><td>' + esc(it.unit) + '</td><td style="text-align:right">' +
-          (it.pk ? fmt(it.pk.qty) + ' → ' : '') + '<b>' + fmt(it.qty) + '</b>' + (it.pk && isFinite(it.pk.kg) ? '<div style="color:#888;font-size:12px">秤 ' + fmt(it.pk.kg) + ' kg</div>' : '') + '</td><td>' +
+        rows1 += '<tr><td>' + esc(o.customer) + '</td><td>' + lk + '</td><td>' + esc(it.name) + '</td><td>' + esc(it.unit) + '</td><td style="text-align:right">' +
+          (it.pk ? fmt(it.pk.qty) + ' → ' : '') + '<b class="mk-cur" data-i="' + esc(o.id + '|' + it.itemId) + '">' + fmt(it.qty) + '</b>' + (it.pk && isFinite(it.pk.kg) ? '<div style="color:#888;font-size:12px">秤 ' + fmt(it.pk.kg) + ' kg</div>' : '') + '</td><td>' +
           it.flags.map(function (x) {
             var k = FB.push({ o: o, it: it, f: x }) - 1;
+            o.fbN++;
             return '<div style="color:' + (x.lv > 1 ? '#b71c1c' : '#8a5a00') + '">' + (x.lv > 1 ? '⚠ ' : '？ ') + esc(x.t) +
               ' <span class="mk-fb" data-k="' + k + '" style="white-space:nowrap">' +
-              '<button class="mk-fbb" data-r="確認有錯" style="font-size:12px;padding:0 6px;margin-left:4px;cursor:pointer">✓ 確認有錯</button>' +
+              '<button class="mk-fbb" data-r="有錯" style="font-size:12px;padding:0 6px;margin-left:4px;cursor:pointer">✓ 有錯，要更改</button>' +
               '<button class="mk-fbb" data-r="正常（誤報）" style="font-size:12px;padding:0 6px;margin-left:4px;cursor:pointer">✗ 這是正常的</button></span></div>';
           }).join('') + '</td></tr>';
       });
@@ -575,29 +670,86 @@
     h += section('🚚 運費要調整（同客戶當天合併）', '#1565c0', rows3 ? '<table style="width:100%;border-collapse:collapse" class="mk-mc-t"><tr><th>客戶</th><th>訂單</th><th>當天合計</th><th>免運門檻</th><th>目前運費</th><th>應該</th></tr>' + rows3 + '</table>' : '運費都正確 👍', frFix.length + ' 家');
 
     // 4. 沒問題 → 勾選後一鍵改成已送達
-    var canDv = function (o) { return /^(已接單|揀貨完成|配送中)$/.test(o.status); };
     var dvN = okO.filter(canDv).length;
-    h += section('✅ 沒發現問題的訂單', '#2e7d4f', okO.length ? okO.map(function (o) {
+    var dvAny = flagged.some(canDv); // 有問題的單處理完也可以勾選送達 → 按鈕要在
+    var okHtml = okO.length ? okO.map(function (o) {
       return '<label style="display:inline-block;margin:2px 12px 2px 0;cursor:pointer">' +
         (canDv(o) ? '<input type="checkbox" class="mk-mc-dv" value="' + esc(o.id) + '"> ' : '') +
         esc(o.customer) + ' ' + oLink(o) + ' <span class="mk-mc-dvst" data-id="' + esc(o.id) + '" style="color:#888;font-size:12px">' + (o.status !== '已接單' ? esc(o.status) : '') + '</span></label>' +
         '<a href="#" class="mk-miss" data-id="' + esc(o.id) + '" style="font-size:11px;color:#999;margin:0 14px 0 -8px">回報漏抓</a>';
     }).join('') +
-      '<div style="color:#666;font-size:12px;margin-top:4px">會計自己發現工具沒抓到的錯（重量、數量、單位），按該訂單旁的「回報漏抓」，寫下商品和問題，之後會用來加新規則。</div>' +
-      (dvN ? '<div style="margin-top:8px;display:flex;gap:10px;align-items:center"><a href="#" id="mk-mc-dvall" style="color:#2e7d4f;font-size:13px">全選（' + dvN + ' 張）</a><button id="mk-mc-dvgo" style="padding:8px 16px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">把勾選的 0 張改成「已送達」</button><span id="mk-mc-dvmsg" style="font-size:13px"></span></div>' +
-        '<div style="color:#666;font-size:12px;margin-top:4px">有問題的訂單（上面紅色、橘色）不在這裡，處理好後重新按一次「會計早上核對」。</div>' : '') : '沒有', okO.length + ' 張');
+      '<div style="color:#666;font-size:12px;margin-top:4px">會計自己發現工具沒抓到的錯（重量、數量、單位），按該訂單旁的「回報漏抓」，寫下商品和問題，之後會用來加新規則。</div>' : '沒有';
+    if (dvN || dvAny) okHtml += '<div style="margin-top:8px;display:flex;gap:10px;align-items:center">' + (dvN ? '<a href="#" id="mk-mc-dvall" style="color:#2e7d4f;font-size:13px">全選（' + dvN + ' 張）</a>' : '') +
+      '<button id="mk-mc-dvgo" style="padding:8px 16px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">把勾選的 0 張改成「已送達」</button><span id="mk-mc-dvmsg" style="font-size:13px"></span></div>' +
+      '<div style="color:#666;font-size:12px;margin-top:4px">上面紅色「重量／數量要確認」的單：每一項都按了「有錯，要更改」或「這是正常的」之後，訂單編號下面會出現勾選框，一樣可以勾起來一起改成已送達。橘色、藍色（價格 0、運費）處理好後重新按一次「會計早上核對」。</div>';
+    h += section('✅ 沒發現問題的訂單', '#2e7d4f', okHtml, okO.length + ' 張');
     $('mk-mc-body').innerHTML = '<style>.mk-mc-t th{background:#f5f5f5;text-align:left;padding:4px 6px;font-size:13px;position:sticky;top:0}.mk-mc-t td{border-top:1px solid #eee;padding:4px 6px;vertical-align:top;font-size:13px}</style>' + h;
-    // 回報按鈕：確認有錯／這是正常的（誤報會送學習清單）
-    [].forEach.call(document.querySelectorAll('.mk-fbb'), function (b) {
+    // 回報按鈕：有錯，要更改（面板上直接改數量；記到「異常紀錄」＝待追蹤，主任／客服三的提醒信會列出）／這是正常的（誤報送學習清單）
+    function fbPayload(x, result, note, cur) {
+      return { date: DATE, customer: x.o.customer, orderNo: x.o.no, product: x.it.name, unit: x.it.unit, code: x.f.code, text: x.f.t,
+        orig: x.it.pk && isFinite(x.it.pk.qty) ? x.it.pk.qty : '', cur: isFinite(cur) ? cur : '', result: result, note: note };
+    }
+    function fbDone(x) {
+      x.o.fbDone = (x.o.fbDone || 0) + 1;
+      if (x.o.fbN && x.o.fbDone >= x.o.fbN) {
+        var s = document.querySelector('.mk-dvslot[data-id="' + x.o.id + '"]');
+        if (s && !s.innerHTML) {
+          s.innerHTML = '<label style="cursor:pointer;color:#2e7d4f"><input type="checkbox" class="mk-mc-dv" value="' + esc(x.o.id) + '"> 處理完，可改已送達</label> <span class="mk-mc-dvst" data-id="' + esc(x.o.id) + '" style="color:#888"></span>';
+          s.querySelector('input').onchange = resetGo;
+        }
+      }
+    }
+    [].forEach.call(document.querySelectorAll('.mk-fbb'), bindFb);
+    function bindFb(b) {
       b.onclick = function () {
-        var wrap = b.closest('.mk-fb'), x = FB[+wrap.dataset.k], r = b.dataset.r;
-        var note = r === '正常（誤報）' ? (prompt('為什麼這是正常的？（可空白，例如：山東大白一顆本來就 4 公斤）', '') || '') : '';
-        if (note === null) return;
-        sendFeedback({ date: DATE, customer: x.o.customer, orderNo: x.o.no, product: x.it.name, unit: x.it.unit, code: x.f.code, text: x.f.t,
-          orig: x.it.pk && isFinite(x.it.pk.qty) ? x.it.pk.qty : '', cur: isFinite(x.it.qty) ? x.it.qty : '', result: r, note: note });
-        wrap.innerHTML = '<span style="color:#1b5e20;font-size:12px">✓ 已回報：' + esc(r) + (r === '正常（誤報）' ? '（已送學習清單，主任核准後不再提醒）' : '') + '</span>';
+        var wrap = b.closest('.mk-fb'), x = FB[+wrap.dataset.k], r = b.dataset.r, origHtml = wrap.innerHTML;
+        if (r === '正常（誤報）') {
+          var note = prompt('為什麼這是正常的？（可空白，例如：山東大白一顆本來就 4 公斤）', '');
+          if (note === null) return;
+          sendFeedback(fbPayload(x, r, note || '', x.it.qty));
+          wrap.innerHTML = '<span style="color:#1b5e20;font-size:12px">✓ 已回報：這是正常的（已送學習清單，主任核准後不再提醒）</span>';
+          fbDone(x);
+          return;
+        }
+        // 有錯，要更改：原地展開數量輸入框
+        var u = baseUnit(x.it.unit);
+        wrap.innerHTML = '<span style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;color:#333;font-size:12px">正確數量 <input type="number" step="any" min="0" value="' + esc(fmt(x.it.qty)) + '" style="width:80px;font:inherit;padding:1px 4px"> ' + esc(u) +
+          ' <button data-a="save" style="font-size:12px;padding:0 6px;cursor:pointer;background:#c62828;color:#fff;border:0;border-radius:4px">改成這個數量</button>' +
+          ' <button data-a="keep" style="font-size:12px;padding:0 6px;cursor:pointer">數量不改，只記錄有錯</button>' +
+          ' <button data-a="back" style="font-size:12px;padding:0 6px;cursor:pointer">返回</button><span class="mk-edmsg"></span></span>';
+        var inp = wrap.querySelector('input'), msg = wrap.querySelector('.mk-edmsg');
+        inp.focus(); inp.select();
+        wrap.querySelector('[data-a=back]').onclick = function () { wrap.innerHTML = origHtml; [].forEach.call(wrap.querySelectorAll('.mk-fbb'), bindFb); };
+        wrap.querySelector('[data-a=keep]').onclick = function () {
+          var why = prompt('數量不改的原因？（可空白，例如：客人說可以）', '');
+          if (why === null) return;
+          sendFeedback(fbPayload(x, '確認有錯', '數量不改' + (why ? '（' + why + '）' : ''), x.it.qty));
+          wrap.innerHTML = '<span style="color:#1b5e20;font-size:12px">✓ 已記錄有錯（數量不改），主任會收到追蹤提醒</span>';
+          fbDone(x);
+        };
+        wrap.querySelector('[data-a=save]').onclick = async function () {
+          var v = Number(inp.value);
+          if (!(inp.value !== '' && isFinite(v) && v >= 0)) { msg.textContent = ' 請填數字'; return; }
+          v = Math.round(v * 100) / 100;
+          if (v === x.it.qty) { msg.textContent = ' 數量沒變；不用改的話按「數量不改，只記錄有錯」'; return; }
+          if (v > 0 && x.it.qty > 0 && (v / x.it.qty > 20 || x.it.qty / v > 20)) { if (!confirm('從 ' + fmt(x.it.qty) + ' 改成 ' + fmt(v) + '，差很多，確定嗎？')) return; }
+          [].forEach.call(wrap.querySelectorAll('button,input'), function (e) { e.disabled = true; });
+          msg.textContent = ' 改後台中…';
+          var old = x.it.qty, res = await editQty(x.o.id, x.it.itemId, v);
+          if (!res.ok) {
+            msg.style.color = '#b71c1c'; msg.textContent = ' ✗ 沒改成：' + res.msg;
+            [].forEach.call(wrap.querySelectorAll('button,input'), function (e) { e.disabled = false; });
+            return;
+          }
+          x.it.qty = v;
+          var cur = document.querySelector('.mk-cur[data-i="' + (x.o.id + '|' + x.it.itemId).replace(/"/g, '') + '"]');
+          if (cur) cur.innerHTML = '<s style="color:#999">' + esc(fmt(old)) + '</s> ' + esc(fmt(v));
+          sendFeedback(fbPayload(x, '確認有錯', '會計已改數量 ' + fmt(old) + ' → ' + fmt(v), v));
+          wrap.innerHTML = '<span style="color:#1b5e20;font-size:12px">✓ 後台已改成 ' + esc(fmt(v)) + ' ' + esc(u) + '，已記錄有錯，主任會收到追蹤提醒</span>';
+          fbDone(x);
+        };
       };
-    });
+    }
     // 回報漏抓：工具沒抓到、會計自己發現的錯
     [].forEach.call(document.querySelectorAll('.mk-miss'), function (a) {
       a.onclick = function (e) {
