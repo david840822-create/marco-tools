@@ -83,6 +83,7 @@ function doPost(e) {
 // POST {action:'log', rows:[{date, customer, orderNo, product, unit, code, text, orig, cur, kg, source}]}
 // 同一天＋同訂單＋同商品＋同代碼只記一次。「處理結果」欄留給人填（例如：確認正常、已改、誤報）。
 var LOG_SHEET = '異常紀錄';
+// N 欄「追蹤結果（主任填）」2026-11-27 手動加在試算表上；程式只寫到 M 欄，N 欄留給人填（每日提醒信算「確認有錯」但 N 欄空白的筆數）
 var LOG_HEAD = ['記錄時間', '到貨日', '客戶', '訂單編號', '商品', '單位', '異常代碼', '異常說明', '原訂', '現在', '實秤公斤', '來源', '處理結果'];
 function logSheet_() {
   var ss = SpreadsheetApp.getActive(), s = ss.getSheetByName(LOG_SHEET);

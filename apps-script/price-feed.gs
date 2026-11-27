@@ -196,17 +196,30 @@ function okPendingCounts_() {
   });
   return out;
 }
+/* 「異常紀錄」裡會計按「有錯，要更改」的（處理結果以「確認有錯」開頭）、N 欄「追蹤結果」還沒寫的 → 待追蹤筆數（2026-11-27 使用者要求：有錯要有人追） */
+function okTrackCount_() {
+  var res = UrlFetchApp.fetch('https://docs.google.com/spreadsheets/d/' + OK_SPREADSHEET_ID + '/gviz/tq?tqx=out:csv&headers=1&sheet=' + encodeURIComponent('異常紀錄'),
+    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return 0;
+  var csv = Utilities.parseCsv(res.getContentText());
+  if (!csv.length || String(csv[0][12] || '').indexOf('處理結果') < 0) return 0;
+  return csv.slice(1).filter(function (r) { return /^確認有錯/.test(String(r[12] || '').trim()) && !String(r[13] || '').trim(); }).length;
+}
 function okPendingReminder() {
   var to = PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL');
   if (!to) return;
   var list = okPendingCounts_().filter(function (x) { return x.n > 0; });
-  if (!list.length) return;
+  var track = 0; try { track = okTrackCount_(); } catch (e) {}
+  if (!list.length && !track) return;
   var total = list.reduce(function (s, x) { return s + x.n; }, 0);
-  MailApp.sendEmail(to, '📝 馬可：有 ' + total + ' 筆待主管審核',
+  var subj = '📝 馬可：' + [total ? '有 ' + total + ' 筆待主管審核' : '', track ? track + ' 筆「有錯」待追蹤' : ''].filter(String).join('、');
+  MailApp.sendEmail(to, subj,
     list.map(function (x) { return '・' + x.name + '：' + x.n + ' 筆待審核'; }).join('\n') +
-    '\n\n點這裡直接打開試算表，在 A 欄把「待審核」改成「核准」或「退回」就好：\n' + OK_SHEET_URL +
-    '\n（下方分頁可切換「常態OK清單」和「數量異常學習清單」）' +
-    '\n\n（這封信由 Apps Script「每日報價自動備份」寄出，每天 10:00、16:00 檢查，有待審核才寄）');
+    (track ? (list.length ? '\n' : '') + '・異常紀錄（會計早上核對按「有錯，要更改」）：' + track + ' 筆待追蹤' : '') +
+    '\n\n點這裡直接打開試算表：\n' + OK_SHEET_URL +
+    (list.length ? '\n・待審核：在 A 欄把「待審核」改成「核准」或「退回」（下方分頁可切換「常態OK清單」和「數量異常學習清單」）' : '') +
+    (track ? '\n・有錯待追蹤：到「異常紀錄」分頁，M 欄是「確認有錯」的，在 N 欄「追蹤結果」寫原因或處理方式（例如：理貨秤錯、已提醒），寫了就不再提醒' : '') +
+    '\n\n（這封信由 Apps Script「每日報價自動備份」寄出，每天 10:00、16:00 檢查，有待處理才寄）');
 }
 /* 在編輯器手動執行一次：建立待審核提醒排程（不寄信，只在記錄裡顯示目前幾筆） */
 function setupOkReminder() {
