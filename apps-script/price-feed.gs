@@ -170,6 +170,7 @@ function priceReminderText_() {
   return { problem: problem, md: md, body: lines.join('\n') };
 }
 function checkPriceReminder() {
+  allocMissedMail_(Session.getEffectiveUser().getEmail());
   var r = priceReminderText_();
   if (!r.problem) return;
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '⚠ 馬可：' + r.problem,
@@ -196,17 +197,37 @@ function okPendingCounts_() {
   });
   return out;
 }
-/* 「異常紀錄」裡會計按「有錯，要更改」的（處理結果以「確認有錯」開頭）、N 欄「追蹤結果」還沒寫的 → 待追蹤筆數（2026-11-27 使用者要求：有錯要有人追） */
-function okTrackCount_() {
+/* 「異常紀錄」裡出貨單記的「車次沒分完」（G 欄 alloc-missed）、N 欄還沒寫處理結果的列（2026-11-27 使用者要求：漏分一定要讓擁有者知道） */
+function okLogRows_() {
   var res = UrlFetchApp.fetch('https://docs.google.com/spreadsheets/d/' + OK_SPREADSHEET_ID + '/gviz/tq?tqx=out:csv&headers=1&sheet=' + encodeURIComponent('異常紀錄'),
     { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) return 0;
+  if (res.getResponseCode() !== 200) return [];
   var csv = Utilities.parseCsv(res.getContentText());
-  if (!csv.length || String(csv[0][12] || '').indexOf('處理結果') < 0) return 0;
-  return csv.slice(1).filter(function (r) { return /^確認有錯/.test(String(r[12] || '').trim()) && !String(r[13] || '').trim(); }).length;
+  if (!csv.length || String(csv[0][12] || '').indexOf('處理結果') < 0) return [];
+  return csv.slice(1);
+}
+function allocMissedRows_() {
+  return okLogRows_().filter(function (r) { return String(r[6] || '').trim() === 'alloc-missed' && !String(r[13] || '').trim(); });
+}
+/* 有沒處理的「車次沒分完」→ 寄一封給 to（每次排程都會寄，直到 N 欄寫了處理結果） */
+function allocMissedMail_(to) {
+  var rows = []; try { rows = allocMissedRows_(); } catch (e) { return 0; }
+  if (!rows.length || !to) return rows.length;
+  MailApp.sendEmail(to, '🚨 馬可：出貨單車次沒分完 ' + rows.length + ' 筆，請確認',
+    rows.map(function (r) { return '・' + r[1] + ' ' + r[3] + '：' + r[7]; }).join('\n') +
+    '\n\n請確認後台「出貨批次 → 車次分配」已經手動分好、出貨單重新產生過。' +
+    '\n處理好後到「異常紀錄」分頁，在那一列的 N 欄「追蹤結果」寫處理結果（例如：已手動分好），就不會再寄：\n' + OK_SHEET_URL +
+    '\n\n（這封信由 Apps Script「每日報價自動備份」寄出，每天 10:00、16:00、19:00、00:30 檢查）');
+  return rows.length;
+}
+/* 「異常紀錄」裡會計按「有錯，要更改」的（處理結果以「確認有錯」開頭）、N 欄「追蹤結果」還沒寫的 → 待追蹤筆數（2026-11-27 使用者要求：有錯要有人追） */
+function okTrackCount_() {
+  return okLogRows_().filter(function (r) { return /^確認有錯/.test(String(r[12] || '').trim()) && !String(r[13] || '').trim(); }).length;
 }
 function okPendingReminder() {
   var to = PropertiesService.getScriptProperties().getProperty('SUPERVISOR_EMAIL');
+  var owner = Session.getEffectiveUser().getEmail();
+  allocMissedMail_(to ? to + ',' + owner : owner); // 車次沒分完：主任、客服三、擁有者都寄
   if (!to) return;
   var list = okPendingCounts_().filter(function (x) { return x.n > 0; });
   var track = 0; try { track = okTrackCount_(); } catch (e) {}
