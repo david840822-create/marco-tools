@@ -5,6 +5,8 @@
  */
 (async function () {
   var ORIGIN = location.origin;
+  var CS = document.currentScript && document.currentScript.src;
+  var BASE = window.__MK_BASE || (CS ? CS.replace(/[^\/]*(\?.*)?$/, '') : 'https://david840822-create.github.io/marco-tools/');
   if (!/super-marco\.com$/.test(location.hostname)) {
     alert('請在馬可供應商後台（supply-admin.super-marco.com）的頁面上使用這個書籤。');
     return;
@@ -386,7 +388,7 @@
     }
     html += '<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="mk-b" value="' + esc(b.id) + '" data-no="' + esc(b.no) + '" data-date="' + esc(b.date) + '"> ' + esc(b.no) + '　<span style="color:#888">' + esc(b.time) + ' ' + esc(b.status) + '</span> <span class="mk-pst" data-id="' + esc(b.id) + '"></span></label>';
   });
-  html += '<div id="mk-pricewarn"></div>';
+  html += '<div id="mk-pricewarn"></div><div id="mk-checkres"></div>';
   html += '<label style="display:block;margin-top:8px;font-size:13px"><input type="checkbox" id="mk-autoalloc" checked> 先自動分配還沒分配的車次（1車→A … 6車→F）</label>';
   html += '<label style="display:block;font-size:13px"><input type="checkbox" id="mk-skipcancel" checked> 排除「已取消」訂單</label>';
   html += '<button id="mk-go" style="margin-top:10px;width:100%;padding:10px;background:#2e7d4f;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer">產生出貨單（依車號排序）</button>';
@@ -534,6 +536,118 @@
     return res;
   }
 
+  /* ---------- 產生出貨單前先比對（2026-11-27 使用者要求）：馬可後台 vs 理貨表格、車號有沒有輸入 ----------
+   * 第一次按「產生出貨單」只做比對、把結果列在面板；看過再按一次才真的產生（新分頁要在按下的當下開，不能先等比對）。
+   * 理貨表格：價格網路程式 ?action=picking&days=3（最近 3 天理貨表格「匯入馬可系統」分頁），要這台電腦有「價格密碼」。
+   * 判斷（用 11/25～11/26 六個批次實測調過，沒有誤報）：
+   *   - 後台數量 ≠ 理貨表格「數量(回填)」→ 沒匯入或匯入後被改；一半以上不一樣＝這批看起來還沒匯入
+   *   - 理貨表格回填空白 → 還沒回填
+   *   - 整張訂單一項都不在理貨表格，而且裡面有「平常會在理貨表格上」的商品 → 可能是表格產生後才加進批次
+   *     （單一品項不在表上不報：豆腐、肉品、冷凍品等本來就不在理貨表格，會一直誤報）
+   *   - 車次分配頁「未分配」的單沒有配送路線、名稱也沒有「自取」→ 車號沒輸入（會被當成沒車次排最後） */
+  var check = { key: '', res: null };
+  function pickedKey() { return [].map.call(panel.querySelectorAll('.mk-b:checked'), function (c) { return c.value; }).join(',') + '|' + (panel.querySelector('#mk-autoalloc').checked ? 1 : 0); }
+  function resetCheck() {
+    check = { key: '', res: null };
+    var el = panel.querySelector('#mk-checkres'), g = panel.querySelector('#mk-go');
+    if (el) el.innerHTML = '';
+    if (g && !priceGateOpen) { g.textContent = '產生出貨單（依車號排序）'; g.style.background = '#2e7d4f'; }
+  }
+  [].forEach.call(panel.querySelectorAll('.mk-b, #mk-autoalloc'), function (c) { c.addEventListener('change', resetCheck); });
+  function fmtN(n) { return isFinite(n) ? String(Math.round(n * 1000) / 1000) : '?'; }
+  async function priceTools() {
+    var src = await (await fetch(BASE + 'price.js?t=' + Date.now())).text();
+    var T = null;
+    window.__MK_PRICE_TEST = function (t) { T = t; };
+    try { (0, eval)(src); } finally { delete window.__MK_PRICE_TEST; }
+    for (var i = 0; i < 50 && !T; i++) await sleep(100);
+    if (!T) throw new Error('載入 price.js 失敗');
+    return T;
+  }
+  async function readPickingRows() {
+    var key = ''; try { key = localStorage.getItem('mk-price-key') || ''; } catch (e) {}
+    if (!key) return { error: '這台電腦還沒輸入「價格密碼」，讀不到理貨表格，這次只檢查車號' };
+    try {
+      var r = await (await fetch(PRICE_API + '?key=' + encodeURIComponent(key) + '&action=picking&days=3', { redirect: 'follow' })).json();
+      if (!r.ok) return { error: r.badKey ? '價格密碼不對，讀不到理貨表格，這次只檢查車號' : '讀不到理貨表格（' + (r.error || '原因不明') + '），這次只檢查車號' };
+      var P = {}, known = {};
+      r.rows.forEach(function (x) { P[String(x[0]).trim()] = x; known[String(x[2] || '').trim()] = 1; });
+      return { P: P, known: known, files: r.files || [] };
+    } catch (e) { return { error: '讀不到理貨表格（' + e.message + '），這次只檢查車號' }; }
+  }
+  async function checkBatch(b, T, pk, autoAlloc) {
+    var issues = [], stat = {};
+    // 1. 車號：車次分配頁「以訂單顯示」的未分配列表
+    var vf = await loadFrame(ORIGIN + '/delivery-batch/edit/' + b.id + '?pageType=vehicle', function (d) { return readVehicles(d) ? 1 : 0; }, 40000);
+    var un;
+    try { un = await showOrders(vf.frame.contentDocument); } finally { vf.frame.remove(); }
+    var noRoute = un.filter(function (r) { return r.n < 1 && !/自取/.test(r.name); });
+    if (noRoute.length) issues.push({ lv: 2, t: noRoute.length + ' 張沒有配送路線（車號沒輸入），會被當成沒車次排在最後', list: noRoute.map(function (r) { return r.name; }) });
+    var unRouted = un.filter(function (r) { return r.n >= 1 && !r.cb.disabled; });
+    if (unRouted.length && !autoAlloc) issues.push({ lv: 1, t: unRouted.length + ' 張還沒分配車次（「先自動分配」沒有勾）', list: unRouted.map(function (r) { return r.route + ' ' + r.name; }) });
+    // 2. 理貨表格
+    if (!pk.P) return { b: b, issues: issues, stat: stat };
+    var live = null;
+    try { live = {}; (await readBatch(b, true)).orders.forEach(function (o) { live[o.orderNo] = 1; }); } catch (e) { live = null; } // 已取消的單不比
+    var o = T.readOrders(T.openBook(await T.unzip(await T.exportBatch(b))));
+    var inT = 0, diff = [], blank = [], byO = {};
+    o.rows.forEach(function (r) {
+      var id = String(r.B == null ? '' : r.B).trim(), no = String(r.F == null ? '' : r.F).trim();
+      if (!id || (live && no && !live[no])) return;
+      var g = byO[no] || (byO[no] = { c: r.D, no: no, t: 0, known: 0 });
+      var p = pk.P[id];
+      if (p) {
+        g.t++; inT++;
+        var bk = String(p[8] == null ? '' : p[8]).trim(), L = Number(r.L);
+        var u = String(r.I || '').split('|')[0];
+        if (bk === '') blank.push(r.D + ' ' + r.H);
+        else if (Math.abs(Number(bk) - L) > 0.001) diff.push(r.D + ' ' + r.H + '：後台 ' + fmtN(L) + '，理貨表格 ' + fmtN(Number(bk)) + ' ' + u);
+      } else if (pk.known[String(r.H || '').trim()]) g.known++;
+    });
+    stat = { orders: Object.keys(byO).length, items: inT };
+    if (!inT) issues.push({ lv: 2, t: '找不到這批的理貨表格（最近 3 天的理貨表格裡沒有這批的品項，可能還沒產生）' });
+    else {
+      if (diff.length) issues.push({ lv: 2, t: (diff.length >= 5 && diff.length >= inT * 0.5 ? '這批看起來還沒匯入理貨結果！' : '') + diff.length + ' 項後台數量跟理貨表格不一樣（沒匯入，或匯入後有人改過）', list: diff });
+      if (blank.length) issues.push({ lv: 1, t: blank.length + ' 項理貨表格還沒回填數量', list: blank });
+      var lost = Object.keys(byO).filter(function (k) { return byO[k].t === 0 && byO[k].known > 0; });
+      if (lost.length) issues.push({ lv: 2, t: lost.length + ' 張訂單整張不在理貨表格（可能是理貨表格產生後才加進批次，沒有理貨）', list: lost.map(function (k) { return byO[k].c + ' ' + k; }) });
+    }
+    return { b: b, issues: issues, stat: stat };
+  }
+  async function runCheck(picked, autoAlloc) {
+    status('出貨前比對：讀理貨表格、各批次資料…');
+    var pkP = readPickingRows(), T = await priceTools(), pk = await pkP, out = [], i = 0;
+    async function worker() {
+      while (i < picked.length) {
+        var b = picked[i++];
+        try { out.push(await checkBatch(b, T, pk, autoAlloc)); }
+        catch (e) { out.push({ b: b, issues: [{ lv: 2, t: '比對失敗：' + e.message }], stat: {} }); }
+        status('出貨前比對：' + out.length + '/' + picked.length + ' 批完成…');
+      }
+    }
+    await Promise.all([worker(), worker()]);
+    out.sort(function (x, y) { return x.b.no < y.b.no ? -1 : 1; });
+    return { batches: out, pkError: pk.error || '' };
+  }
+  function renderCheck(res) {
+    var bad = res.batches.some(function (r) { return r.issues.some(function (x) { return x.lv > 1; }); });
+    var warn = !!res.pkError || res.batches.some(function (r) { return r.issues.length; });
+    var h = '<div style="margin-top:8px;border:2px solid ' + (bad ? '#c62828' : warn ? '#ef6c00' : '#2e7d4f') + ';border-radius:6px;padding:8px;font-size:13px;background:' + (bad ? '#fdecea' : warn ? '#fff4e5' : '#eef7f1') + '">' +
+      '<b style="font-size:14px;color:' + (bad ? '#b71c1c' : warn ? '#8a5a00' : '#1b5e20') + '">' + (bad ? '⚠ 出貨前比對：有問題，請先確認' : res.pkError && !res.batches.some(function (r) { return r.issues.length; }) ? '？ 出貨前比對：車號都有，但理貨表格沒有比對到' : warn ? '？ 出貨前比對：有地方要留意' : '✓ 出貨前比對：馬可後台跟理貨表格一致、車號都有') + '</b>';
+    if (res.pkError) h += '<div style="color:#b71c1c;margin-top:4px">' + esc(res.pkError) + '</div>';
+    res.batches.forEach(function (r) {
+      h += '<div style="margin-top:6px"><b>批次 ' + esc(r.b.no) + '</b>' + (r.stat.items ? '<span style="color:#666">（' + r.stat.orders + ' 張單、' + r.stat.items + ' 項有對到理貨表格）</span>' : '') + '：' + (r.issues.length ? '' : '<span style="color:#1b5e20">✓ 沒問題</span>');
+      r.issues.forEach(function (x) {
+        h += '<div style="color:' + (x.lv > 1 ? '#b71c1c' : '#8a5a00') + ';margin-left:8px">' + (x.lv > 1 ? '⚠ ' : '？ ') + esc(x.t) + '</div>';
+        if (x.list && x.list.length) h += '<div style="margin-left:22px;color:#333;font-size:12px">' + x.list.slice(0, 15).map(esc).join('<br>') + (x.list.length > 15 ? '<br>…還有 ' + (x.list.length - 15) + ' 筆' : '') + '</div>';
+      });
+      h += '</div>';
+    });
+    h += '<div style="margin-top:6px;color:#333">' + (bad ? '請先到後台處理（匯入理貨結果、補配送路線等），再重新勾選批次比對一次。確定不用處理，再按一次下面的紅色按鈕。' : '再按一次下面的按鈕產生出貨單。') + '</div></div>';
+    panel.querySelector('#mk-checkres').innerHTML = h;
+    return { bad: bad, warn: warn };
+  }
+
   panel.querySelector('#mk-go').onclick = async function () {
     var picked = [].slice.call(panel.querySelectorAll('.mk-b:checked')).map(function (c) { return { id: c.value, no: c.getAttribute('data-no') }; });
     if (!picked.length) { status('請先勾選要列印的批次'); return; }
@@ -556,6 +670,24 @@
       }
     }
     var opts = { skipCancel: panel.querySelector('#mk-skipcancel').checked, autoAlloc: panel.querySelector('#mk-autoalloc').checked };
+    /* 出貨前比對：這次勾的批次還沒比對過 → 先比對、列出結果，不產生（再按一次才產生） */
+    if (check.key !== pickedKey()) {
+      var goBtn = this;
+      goBtn.disabled = true; goBtn.style.opacity = .6; goBtn.textContent = '比對中…';
+      panel.querySelector('#mk-checkres').innerHTML = '';
+      var cr;
+      try { cr = renderCheck(await runCheck(picked, opts.autoAlloc)); }
+      catch (e) {
+        panel.querySelector('#mk-checkres').innerHTML = '<div style="margin-top:8px;color:#b71c1c">⚠ 比對失敗：' + esc(e.message) + '</div>';
+        cr = { bad: true };
+      }
+      check = { key: pickedKey(), res: cr };
+      goBtn.disabled = false; goBtn.style.opacity = 1;
+      goBtn.textContent = cr.bad ? '已看過，仍要產生出貨單' : '比對完成，產生出貨單';
+      goBtn.style.background = cr.bad ? '#c62828' : '#2e7d4f';
+      status(cr.bad ? '⚠ 出貨前比對有問題，請看上面紅色的地方。' : '出貨前比對完成，再按一次產生出貨單。');
+      return;
+    }
     this.disabled = true; this.style.opacity = .6;
     var T0 = Date.now();
     var win = window.open('', '_blank');
